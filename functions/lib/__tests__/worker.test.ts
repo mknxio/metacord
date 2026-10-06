@@ -36,3 +36,19 @@ describe('worker security headers', () => {
     expect(connectSrc).toBe("connect-src 'self' https://discord.com");
   });
 });
+
+describe('removed widget proxy', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('does not route /api/widget/:id to a Discord proxy', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+    const response = await callWorker('/api/widget/123456789012345678');
+
+    expect(response.status).toBe(404);
+    expect(response.headers.get('Content-Type') ?? '').not.toContain('application/json');
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});

@@ -16,10 +16,6 @@ export function buildUserCacheKey(request: Request, userId: string): Request {
   return new Request(url.toString(), { method: 'GET' });
 }
 
-export function buildCacheKey(request: Request): Request {
-  return new Request(request.url, { method: 'GET' });
-}
-
 export async function getCachedResponse(
   cacheKey: Request,
   sessionCookie?: string

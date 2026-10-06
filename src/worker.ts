@@ -1,9 +1,6 @@
 import { app } from '../functions/api/[[route]]';
 import type { Env } from '../functions/lib/types';
 
-// Re-export DO class for wrangler to bundle
-export { DiscordRateLimiter } from '../functions/lib/discord-rate-limiter';
-
 interface WorkerEnv extends Env {
   ASSETS: Fetcher;
 }
