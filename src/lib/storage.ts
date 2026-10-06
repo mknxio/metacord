@@ -1,3 +1,5 @@
+import { normalizeInviteUrl } from './utils';
+
 export interface WidgetCacheEntry {
   instantInvite: string | null;
   presenceCount: number | null;
@@ -10,6 +12,56 @@ export interface CategoryDefinition {
   order: number;
 }
 
+export interface MembershipSnapshot {
+  joinedAt: string | null;
+  nickname: string | null;
+  roleCount: number;
+  capturedAt: string;
+}
+
+export type InviteSource = 'widget' | 'manual';
+
+export interface InviteSnapshot {
+  url: string;
+  source: InviteSource;
+  capturedAt: string;
+}
+
+/**
+ * Persisted per-server record built from observed guild lists.
+ *
+ * `name === null` marks a server recovered only from orphaned annotations (left before
+ * snapshots existed); the UI labels it "Unknown server" instead of persisting a fake name.
+ */
+export interface ServerSnapshot {
+  id: string;
+  name: string | null;
+  icon: string | null;
+  banner: string | null;
+  owner: boolean;
+  features: string[];
+  firstSeenAt: string | null;
+  lastSeenAt: string | null;
+  approximateMemberCount: number | null;
+  approximatePresenceCount: number | null;
+  membership: MembershipSnapshot | null;
+  invite: InviteSnapshot | null;
+  savedAt: string | null;
+  departedAt: string | null;
+  departureReason: string | null;
+}
+
+export const CURRENT_USER_DATA_VERSION = 3;
+
+export class UnsupportedUserDataVersionError extends Error {
+  version: number;
+  constructor(version: number) {
+    super(`User data version ${version} is newer than this app supports (${CURRENT_USER_DATA_VERSION})`);
+    this.name = 'UnsupportedUserDataVersionError';
+    this.version = version;
+  }
+}
+
 export interface UserDataStore {
   version: number;
   favorites: string[];
@@ -19,6 +71,7 @@ export interface UserDataStore {
   lastFetchTimestamp: string | null;
   categories: CategoryDefinition[];
   serverCategories: Record<string, string>;
+  servers: Record<string, ServerSnapshot>;
 }
 
 interface StorageOptions {
@@ -28,7 +81,7 @@ interface StorageOptions {
 const STORAGE_KEY = 'discord_manager_user_data';
 
 export const createDefaultUserData = (): UserDataStore => ({
-  version: 2,
+  version: CURRENT_USER_DATA_VERSION,
   favorites: [],
   nicknames: {},
   notes: {},
@@ -36,6 +89,7 @@ export const createDefaultUserData = (): UserDataStore => ({
   lastFetchTimestamp: null,
   categories: [],
   serverCategories: {},
+  servers: {},
 });
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -78,18 +132,100 @@ const toCategoryDefinitions = (value: unknown): CategoryDefinition[] => {
   );
 };
 
+const toNullableString = (value: unknown): string | null => (typeof value === 'string' ? value : null);
+
+const toNullableCount = (value: unknown): number | null =>
+  typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+
+const toMembershipSnapshot = (value: unknown): MembershipSnapshot | null => {
+  if (!isRecord(value) || typeof value.capturedAt !== 'string') return null;
+  return {
+    joinedAt: toNullableString(value.joinedAt),
+    nickname: toNullableString(value.nickname),
+    roleCount: toNullableCount(value.roleCount) ?? 0,
+    capturedAt: value.capturedAt,
+  };
+};
+
+const toInviteSnapshot = (value: unknown): InviteSnapshot | null => {
+  if (!isRecord(value) || typeof value.url !== 'string' || typeof value.capturedAt !== 'string') return null;
+  // Imported files are untrusted: only keep invites that validate as Discord invite URLs.
+  const url = normalizeInviteUrl(value.url);
+  if (!url) return null;
+  const source: InviteSource = value.source === 'widget' ? 'widget' : 'manual';
+  return { url, source, capturedAt: value.capturedAt };
+};
+
+const toServerSnapshots = (value: unknown): Record<string, ServerSnapshot> => {
+  if (!isRecord(value)) return {};
+  return Object.entries(value).reduce<Record<string, ServerSnapshot>>((acc, [key, entry]) => {
+    if (!isRecord(entry)) return acc;
+    acc[key] = {
+      id: key,
+      name: toNullableString(entry.name),
+      icon: toNullableString(entry.icon),
+      banner: toNullableString(entry.banner),
+      owner: entry.owner === true,
+      features: toStringArray(entry.features),
+      firstSeenAt: toNullableString(entry.firstSeenAt),
+      lastSeenAt: toNullableString(entry.lastSeenAt),
+      approximateMemberCount: toNullableCount(entry.approximateMemberCount),
+      approximatePresenceCount: toNullableCount(entry.approximatePresenceCount),
+      membership: toMembershipSnapshot(entry.membership),
+      invite: toInviteSnapshot(entry.invite),
+      savedAt: toNullableString(entry.savedAt),
+      departedAt: toNullableString(entry.departedAt),
+      departureReason: toNullableString(entry.departureReason),
+    };
+    return acc;
+  }, {});
+};
+
+const sanitizeUserData = (raw: Record<string, unknown>): UserDataStore => ({
+  version: typeof raw.version === 'number' ? raw.version : 1,
+  favorites: toStringArray(raw.favorites),
+  nicknames: toStringRecord(raw.nicknames),
+  notes: toStringRecord(raw.notes),
+  widgetCache: toWidgetCache(raw.widgetCache),
+  lastFetchTimestamp: typeof raw.lastFetchTimestamp === 'string' ? raw.lastFetchTimestamp : null,
+  categories: toCategoryDefinitions(raw.categories),
+  serverCategories: toStringRecord(raw.serverCategories),
+  servers: toServerSnapshots(raw.servers),
+});
+
 const resolveStorageKey = (options?: StorageOptions): string => options?.storageKey ?? STORAGE_KEY;
 
 const migrateUserData = (data: UserDataStore): UserDataStore => {
-  if (data.version < 2) {
-    return {
-      ...data,
+  if (data.version > CURRENT_USER_DATA_VERSION) {
+    throw new UnsupportedUserDataVersionError(data.version);
+  }
+  let migrated = data;
+  if (migrated.version < 2) {
+    migrated = {
+      ...migrated,
       version: 2,
-      categories: data.categories ?? [],
-      serverCategories: data.serverCategories ?? {},
+      categories: migrated.categories ?? [],
+      serverCategories: migrated.serverCategories ?? {},
     };
   }
-  return data;
+  if (migrated.version < 3) {
+    migrated = {
+      ...migrated,
+      version: 3,
+      servers: migrated.servers ?? {},
+    };
+  }
+  return migrated;
+};
+
+export const unsupportedBackupKey = (options?: StorageOptions): string =>
+  `${resolveStorageKey(options)}_unsupported_backup`;
+
+const backupUnsupportedPayload = (payload: string, options?: StorageOptions): void => {
+  const key = unsupportedBackupKey(options);
+  if (localStorage.getItem(key) === null) {
+    localStorage.setItem(key, payload);
+  }
 };
 
 export const loadUserData = (options?: StorageOptions): UserDataStore => {
@@ -102,16 +238,13 @@ export const loadUserData = (options?: StorageOptions): UserDataStore => {
     if (!isRecord(parsed)) {
       return createDefaultUserData();
     }
-    return migrateUserData({
-      version: typeof parsed.version === 'number' ? parsed.version : 1,
-      favorites: toStringArray(parsed.favorites),
-      nicknames: toStringRecord(parsed.nicknames),
-      notes: toStringRecord(parsed.notes),
-      widgetCache: toWidgetCache(parsed.widgetCache),
-      lastFetchTimestamp: typeof parsed.lastFetchTimestamp === 'string' ? parsed.lastFetchTimestamp : null,
-      categories: toCategoryDefinitions(parsed.categories),
-      serverCategories: toStringRecord(parsed.serverCategories),
-    });
+    if (typeof parsed.version === 'number' && parsed.version > CURRENT_USER_DATA_VERSION) {
+      // Data written by a newer app version: keep an untouched copy so falling back to
+      // defaults (and the next save) cannot destroy it.
+      backupUnsupportedPayload(stored, options);
+      throw new UnsupportedUserDataVersionError(parsed.version);
+    }
+    return migrateUserData(sanitizeUserData(parsed));
   } catch (error) {
     console.error('Failed to load user data', error);
     return createDefaultUserData();
@@ -218,7 +351,8 @@ const isValidUserData = (value: unknown): value is UserDataStore => {
   if (!isRecord(value.widgetCache)) return false;
   // lastFetchTimestamp is optional for backwards compatibility
   if (value.lastFetchTimestamp !== undefined && value.lastFetchTimestamp !== null && typeof value.lastFetchTimestamp !== 'string') return false;
-  // categories and serverCategories are optional (v1 compat)
+  // categories and serverCategories are optional (v1 compat); servers is optional (v2 compat)
+  if (value.servers !== undefined && !isRecord(value.servers)) return false;
   return true;
 };
 
@@ -227,16 +361,8 @@ export const importUserData = (raw: unknown, options?: StorageOptions): UserData
     throw new Error('Invalid user data format');
   }
 
-  const sanitized: UserDataStore = migrateUserData({
-    version: raw.version,
-    favorites: toStringArray(raw.favorites),
-    nicknames: toStringRecord(raw.nicknames),
-    notes: toStringRecord(raw.notes),
-    widgetCache: toWidgetCache(raw.widgetCache),
-    lastFetchTimestamp: typeof raw.lastFetchTimestamp === 'string' ? raw.lastFetchTimestamp : null,
-    categories: toCategoryDefinitions(raw.categories),
-    serverCategories: toStringRecord(raw.serverCategories),
-  });
+  // Throws UnsupportedUserDataVersionError before anything is persisted.
+  const sanitized: UserDataStore = migrateUserData(sanitizeUserData(raw as unknown as Record<string, unknown>));
   saveUserData(sanitized, options);
   return sanitized;
 };
@@ -340,6 +466,190 @@ export const assignServerToCategory = (
     serverCategories[guildId] = categoryId;
   }
   const next = { ...data, serverCategories };
+  saveUserData(next, options);
+  return next;
+};
+
+// --- Server snapshots ---
+
+/** Guild fields observed in a guild-list response (structurally compatible with ApiGuild). */
+export interface ObservedGuild {
+  id: string;
+  name: string;
+  icon?: string | null;
+  banner?: string | null;
+  owner?: boolean;
+  features?: string[];
+  approximate_member_count?: number | null;
+  approximate_presence_count?: number | null;
+}
+
+const collectAnnotatedGuildIds = (data: UserDataStore): string[] => {
+  const ids = new Set<string>([
+    ...data.favorites,
+    ...Object.keys(data.nicknames),
+    ...Object.keys(data.notes),
+    ...Object.keys(data.serverCategories),
+    ...Object.keys(data.widgetCache),
+  ]);
+  return [...ids];
+};
+
+const createUnknownDepartedSnapshot = (guildId: string, nowIso: string): ServerSnapshot => ({
+  id: guildId,
+  name: null,
+  icon: null,
+  banner: null,
+  owner: false,
+  features: [],
+  firstSeenAt: null,
+  lastSeenAt: null,
+  approximateMemberCount: null,
+  approximatePresenceCount: null,
+  membership: null,
+  invite: null,
+  savedAt: null,
+  departedAt: nowIso,
+  departureReason: null,
+});
+
+const snapshotFromGuild = (
+  guild: ObservedGuild,
+  previous: ServerSnapshot | undefined,
+  nowIso: string,
+): ServerSnapshot => ({
+  id: guild.id,
+  name: guild.name,
+  icon: guild.icon ?? null,
+  banner: guild.banner ?? null,
+  owner: guild.owner === true,
+  features: Array.isArray(guild.features) ? [...guild.features] : [],
+  firstSeenAt: previous?.firstSeenAt ?? nowIso,
+  lastSeenAt: nowIso,
+  // Edge-cached responses may predate count support; keep the last known counts then.
+  approximateMemberCount: toNullableCount(guild.approximate_member_count) ?? previous?.approximateMemberCount ?? null,
+  approximatePresenceCount:
+    toNullableCount(guild.approximate_presence_count) ?? previous?.approximatePresenceCount ?? null,
+  membership: previous?.membership ?? null,
+  invite: previous?.invite ?? null,
+  savedAt: previous?.savedAt ?? null,
+  departedAt: null,
+  departureReason: previous?.departureReason ?? null,
+});
+
+/**
+ * Reconciles persisted server snapshots against a complete, successfully fetched guild list.
+ *
+ * Present guilds are upserted (clearing any departure), snapshots absent from the list are
+ * marked departed, and annotation-only guild IDs become unknown-name departed records.
+ * Pure: callers must only pass a list from a successful fetch and persist the result.
+ */
+export const reconcileServerSnapshots = (
+  data: UserDataStore,
+  guilds: readonly ObservedGuild[],
+  nowIso: string,
+): UserDataStore => {
+  const servers: Record<string, ServerSnapshot> = { ...data.servers };
+  const presentIds = new Set<string>();
+
+  for (const guild of guilds) {
+    presentIds.add(guild.id);
+    servers[guild.id] = snapshotFromGuild(guild, data.servers[guild.id], nowIso);
+  }
+
+  for (const [guildId, snapshot] of Object.entries(servers)) {
+    if (!presentIds.has(guildId) && snapshot.departedAt === null) {
+      servers[guildId] = { ...snapshot, departedAt: nowIso };
+    }
+  }
+
+  for (const guildId of collectAnnotatedGuildIds(data)) {
+    if (!presentIds.has(guildId) && !servers[guildId]) {
+      servers[guildId] = createUnknownDepartedSnapshot(guildId, nowIso);
+    }
+  }
+
+  return { ...data, servers };
+};
+
+export interface ServerCapture {
+  membership: MembershipSnapshot | null;
+  invite: InviteSnapshot | null;
+  departureReason: string | null;
+}
+
+/**
+ * Saves (or refreshes) a "save for later" capture for a current server. Membership and
+ * invite fall back to the previous capture when the new one has none, so a refresh that
+ * cannot reach Discord never erases what was captured before.
+ */
+export const saveServerCapture = (
+  data: UserDataStore,
+  guild: ObservedGuild,
+  capture: ServerCapture,
+  nowIso: string,
+  options?: StorageOptions,
+): UserDataStore => {
+  const previous = data.servers[guild.id];
+  const base = snapshotFromGuild(guild, previous, nowIso);
+  const reason = capture.departureReason?.trim() ?? '';
+  const snapshot: ServerSnapshot = {
+    ...base,
+    membership: capture.membership ?? base.membership,
+    invite: capture.invite ?? base.invite,
+    savedAt: base.savedAt ?? nowIso,
+    departureReason: reason.length > 0 ? reason : null,
+  };
+  const next = { ...data, servers: { ...data.servers, [guild.id]: snapshot } };
+  saveUserData(next, options);
+  return next;
+};
+
+export const updateDepartureReason = (
+  data: UserDataStore,
+  guildId: string,
+  reason: string,
+  options?: StorageOptions,
+): UserDataStore => {
+  const snapshot = data.servers[guildId];
+  if (!snapshot) return data;
+  const trimmed = reason.trim();
+  const next = {
+    ...data,
+    servers: {
+      ...data.servers,
+      [guildId]: { ...snapshot, departureReason: trimmed.length > 0 ? trimmed : null },
+    },
+  };
+  saveUserData(next, options);
+  return next;
+};
+
+/**
+ * Permanently removes a departed server's snapshot and every annotation keyed by its ID.
+ * Refuses (returns data unchanged) for servers that are not departed.
+ */
+export const forgetServer = (
+  data: UserDataStore,
+  guildId: string,
+  options?: StorageOptions,
+): UserDataStore => {
+  const snapshot = data.servers[guildId];
+  if (!snapshot || snapshot.departedAt === null) return data;
+  const without = <T>(record: Record<string, T>): Record<string, T> => {
+    const copy = { ...record };
+    delete copy[guildId];
+    return copy;
+  };
+  const next: UserDataStore = {
+    ...data,
+    favorites: data.favorites.filter((id) => id !== guildId),
+    nicknames: without(data.nicknames),
+    notes: without(data.notes),
+    widgetCache: without(data.widgetCache),
+    serverCategories: without(data.serverCategories),
+    servers: without(data.servers),
+  };
   saveUserData(next, options);
   return next;
 };

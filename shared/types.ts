@@ -7,7 +7,7 @@ export interface DiscordUser {
   avatar: string | null;
 }
 
-/** Discord API guild object (GET /users/@me/guilds) */
+/** Discord API guild object (GET /users/@me/guilds?with_counts=true) */
 export interface DiscordGuild {
   id: string;
   name: string;
@@ -15,6 +15,9 @@ export interface DiscordGuild {
   banner: string | null;
   owner: boolean;
   features: string[];
+  /** Present when requested with `with_counts=true`; absent from older cached responses. */
+  approximate_member_count?: number | null;
+  approximate_presence_count?: number | null;
 }
 
 /** Discord API guild member object (GET /users/@me/guilds/:id/member) */

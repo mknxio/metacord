@@ -20,6 +20,9 @@ import {
   type WidgetCacheEntry,
 } from '../storage';
 
+/** Shape of a schema v2 payload (before server snapshots existed). */
+type V2UserData = Omit<UserDataStore, 'servers'>;
+
 // Use a unique key so tests don't collide with default storage
 const TEST_KEY = '__test_storage_key__';
 const opts = { storageKey: TEST_KEY };
@@ -58,7 +61,7 @@ describe('createDefaultUserData', () => {
   it('returns an object with correct shape and defaults', () => {
     const data = createDefaultUserData();
     expect(data).toEqual({
-      version: 2,
+      version: 3,
       favorites: [],
       nicknames: {},
       notes: {},
@@ -66,6 +69,7 @@ describe('createDefaultUserData', () => {
       lastFetchTimestamp: null,
       categories: [],
       serverCategories: {},
+      servers: {},
     });
   });
 
@@ -83,8 +87,8 @@ describe('loadUserData', () => {
     expect(data).toEqual(createDefaultUserData());
   });
 
-  it('loads valid stored data', () => {
-    const stored: UserDataStore = {
+  it('loads valid stored v2 data and migrates it to v3 without losing fields', () => {
+    const stored: V2UserData = {
       version: 2,
       favorites: ['guild1', 'guild2'],
       nicknames: { guild1: 'My Server' },
@@ -96,10 +100,10 @@ describe('loadUserData', () => {
     };
     localStorage.setItem(TEST_KEY, JSON.stringify(stored));
     const data = loadUserData(opts);
-    expect(data).toEqual(stored);
+    expect(data).toEqual({ ...stored, version: 3, servers: {} });
   });
 
-  it('migrates v1 data to v2 on load', () => {
+  it('migrates v1 data through v2 to v3 on load', () => {
     const v1Data = {
       version: 1,
       favorites: ['guild1'],
@@ -110,7 +114,8 @@ describe('loadUserData', () => {
     };
     localStorage.setItem(TEST_KEY, JSON.stringify(v1Data));
     const data = loadUserData(opts);
-    expect(data.version).toBe(2);
+    expect(data.version).toBe(3);
+    expect(data.servers).toEqual({});
     expect(data.categories).toEqual([]);
     expect(data.serverCategories).toEqual({});
     expect(data.favorites).toEqual(['guild1']);
@@ -137,7 +142,7 @@ describe('loadUserData', () => {
   it('sanitizes missing fields with defaults', () => {
     localStorage.setItem(TEST_KEY, JSON.stringify({ version: 2 }));
     const data = loadUserData(opts);
-    expect(data.version).toBe(2);
+    expect(data.version).toBe(3);
     expect(data.favorites).toEqual([]);
     expect(data.nicknames).toEqual({});
     expect(data.notes).toEqual({});
@@ -205,7 +210,7 @@ describe('loadUserData', () => {
 
   it('uses default storage key when no options provided', () => {
     const defaultKey = 'discord_manager_user_data';
-    const stored: UserDataStore = {
+    const stored: V2UserData = {
       version: 2,
       favorites: ['guild1'],
       nicknames: {},
@@ -466,7 +471,7 @@ describe('exportUserData', () => {
 
 describe('importUserData', () => {
   it('imports valid user data', () => {
-    const validData: UserDataStore = {
+    const validData: V2UserData = {
       version: 2,
       favorites: ['guild1'],
       nicknames: { guild1: 'Test' },
@@ -505,7 +510,7 @@ describe('importUserData', () => {
   });
 
   it('persists imported data to localStorage', () => {
-    const validData: UserDataStore = {
+    const validData: V2UserData = {
       version: 2,
       favorites: ['guild1'],
       nicknames: {},
@@ -737,7 +742,7 @@ describe('assignServerToCategory', () => {
 });
 
 describe('import v1 data with categories migration', () => {
-  it('migrates imported v1 data to v2 with empty categories', () => {
+  it('migrates imported v1 data to v3 with empty categories and servers', () => {
     const v1Data = {
       version: 1,
       favorites: ['guild1'],
@@ -747,7 +752,8 @@ describe('import v1 data with categories migration', () => {
       lastFetchTimestamp: null,
     };
     const result = importUserData(v1Data, opts);
-    expect(result.version).toBe(2);
+    expect(result.version).toBe(3);
+    expect(result.servers).toEqual({});
     expect(result.categories).toEqual([]);
     expect(result.serverCategories).toEqual({});
     expect(result.favorites).toEqual(['guild1']);
