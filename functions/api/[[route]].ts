@@ -6,6 +6,7 @@ import {
   getCachedResponse,
 } from '../lib/cache';
 import { parseCookies, serializeCookie } from '../lib/cookies';
+import { GUILDS_LIST_PATH, transformGuild } from '../lib/guilds';
 import { createPkceChallenge, createPkceVerifier } from '../lib/crypto';
 import { errorResponse, jsonResponse } from '../lib/http';
 import {
@@ -235,7 +236,7 @@ app.get('/api/guilds', async (c) => {
   if (cached) return cached;
 
   const result = await fetchDiscordWithRefresh(
-    `${DISCORD_API_BASE}/users/@me/guilds`,
+    `${DISCORD_API_BASE}${GUILDS_LIST_PATH}`,
     sessionContext,
     c.env
   );
@@ -257,17 +258,7 @@ app.get('/api/guilds', async (c) => {
   }
 
   const guilds: DiscordGuild[] = await result.response.json();
-  const transformed = guilds.map((guild) => ({
-    id: guild.id,
-    name: guild.name,
-    icon: guild.icon,
-    banner: guild.banner,
-    owner: guild.owner,
-    features: guild.features,
-    icon_url: guild.icon
-      ? `https://cdn.discordapp.com/icons/${guild.id}/${guild.icon}.${guild.icon.startsWith('a_') ? 'gif' : 'png'}`
-      : null,
-  }));
+  const transformed = guilds.map(transformGuild);
 
   return cachedJsonResponse(
     c.executionCtx,
