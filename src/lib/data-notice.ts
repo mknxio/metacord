@@ -1,6 +1,7 @@
 import {
   discardUnsupportedBackups,
-  getUnpreservedPayload,
+  isUserDataWriteBlocked,
+  listUnpreservedPayloads,
   listUnsupportedBackups,
   releaseUnpreservedPayload,
   type UnsupportedBackup,
@@ -26,9 +27,10 @@ const downloadBackup = (backup: UnsupportedBackup, filename: string): void => {
  * such data in backup keys instead of loading it; this makes that visible and lets the user
  * download it (to import in a version that supports it) or discard it after confirmation.
  *
- * When no backup copy fit in storage, the payload is held in memory and saving is paused so
- * the main key keeps it. Downloading or discarding it resumes saving and calls
- * `onWritesResumed` so the caller can persist changes made while saving was paused.
+ * When no backup copy fit in storage, payloads are held in memory and listed here too; while
+ * the main key holds one of them, saving is paused. Downloading or discarding releases that
+ * exact payload, and `onWritesResumed` runs only if that leaves nothing at risk in the main
+ * key, so the caller can persist changes made while saving was paused.
  */
 export const renderUnsupportedDataNotice = (
   container: HTMLElement,
@@ -36,16 +38,18 @@ export const renderUnsupportedDataNotice = (
   hooks?: { onWritesResumed?: () => void },
 ): void => {
   const backups = listUnsupportedBackups(options);
-  const unpreserved = getUnpreservedPayload(options);
-  const entries = unpreserved ? [...backups, unpreserved] : backups;
+  const held = listUnpreservedPayloads(options);
+  const entries = [...backups, ...held];
   container.replaceChildren();
   container.classList.toggle('hidden', entries.length === 0);
   if (entries.length === 0) return;
 
   const rerender = () => renderUnsupportedDataNotice(container, options, hooks);
-  const resumeWrites = (release: { discard: boolean }) => {
-    releaseUnpreservedPayload(options, release);
-    hooks?.onWritesResumed?.();
+  const blocked = isUserDataWriteBlocked(options);
+  const release = (payloads: string[], discard: boolean) => {
+    const wasBlocked = isUserDataWriteBlocked(options);
+    payloads.forEach((payload) => releaseUnpreservedPayload(payload, options, { discard }));
+    if (wasBlocked && !isUserDataWriteBlocked(options)) hooks?.onWritesResumed?.();
   };
 
   const versions = [...new Set(entries.map((entry) => entry.version).filter((v): v is number => v !== null))];
@@ -59,13 +63,22 @@ export const renderUnsupportedDataNotice = (
         'They are preserved here, not deleted. Download them to keep a copy and import the file in a version that supports it.',
     ),
   );
-  if (unpreserved) {
+  if (blocked) {
     container.appendChild(
       createElement(
         'p',
         'data-notice-body data-notice-warning',
         'Saving is paused: browser storage had no room for a separate copy, so saving now would overwrite that data. ' +
           'Until you download or discard it, changes you make are not saved and will be lost when you leave or reload this page.',
+      ),
+    );
+  } else if (held.length > 0) {
+    container.appendChild(
+      createElement(
+        'p',
+        'data-notice-body data-notice-warning',
+        'Browser storage had no room for a separate copy, so some of this data exists only in this page. ' +
+          'Download it before you leave or reload this page.',
       ),
     );
   }
@@ -78,9 +91,9 @@ export const renderUnsupportedDataNotice = (
     button.type = 'button';
     button.addEventListener('click', () => {
       downloadBackup(entry, `user_data_v${entry.version ?? 'unknown'}_preserved${suffix}.json`);
-      if (entry === unpreserved) {
-        // The download is now the user's copy, so the main key may be overwritten.
-        resumeWrites({ discard: false });
+      if (held.includes(entry)) {
+        // The download is now the user's copy of this payload (and only this one).
+        release([entry.payload], false);
         rerender();
       }
     });
@@ -94,7 +107,10 @@ export const renderUnsupportedDataNotice = (
     );
     if (!confirmed) return;
     discardUnsupportedBackups(options);
-    if (unpreserved) resumeWrites({ discard: true });
+    release(
+      held.map((entry) => entry.payload),
+      true,
+    );
     rerender();
   });
   actions.appendChild(discard);

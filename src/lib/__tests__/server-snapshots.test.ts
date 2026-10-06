@@ -4,9 +4,9 @@ import {
   discardUnsupportedBackups,
   exportUserData,
   forgetServer,
-  getUnpreservedPayload,
   importUserData,
   isUserDataWriteBlocked,
+  listUnpreservedPayloads,
   listUnsupportedBackups,
   loadUserData,
   reconcileServerSnapshots,
@@ -446,7 +446,7 @@ describe('newer-version data that cannot be backed up', () => {
     expect(data).toEqual(createDefaultUserData());
     expect(listUnsupportedBackups(options)).toEqual([]);
     expect(isUserDataWriteBlocked(options)).toBe(true);
-    expect(getUnpreservedPayload(options)).toEqual({ key: options.storageKey, payload: newer, version: 9 });
+    expect(listUnpreservedPayloads(options)).toEqual([{ key: options.storageKey, payload: newer, version: 9 }]);
 
     data = reconcileServerSnapshots(data, [guild('g1')], T1);
     saveUserData(data, options);
@@ -476,7 +476,7 @@ describe('newer-version data that cannot be backed up', () => {
     failBackupWrites();
     loadUserData(options);
 
-    releaseUnpreservedPayload(options);
+    releaseUnpreservedPayload(newer, options);
     expect(isUserDataWriteBlocked(options)).toBe(false);
     expect(localStorage.getItem(options.storageKey)).toBe(newer);
 
@@ -493,7 +493,7 @@ describe('newer-version data that cannot be backed up', () => {
     failBackupWrites();
     loadUserData(options);
 
-    releaseUnpreservedPayload(options, { discard: true });
+    releaseUnpreservedPayload(newer, options, { discard: true });
     expect(isUserDataWriteBlocked(options)).toBe(false);
     expect(localStorage.getItem(options.storageKey)).toBeNull();
   });

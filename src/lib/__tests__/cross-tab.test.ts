@@ -5,7 +5,9 @@ import { syncGuildList } from '../guild-sync';
 import {
   createDefaultUserData,
   isUserDataWriteBlocked,
+  listUnpreservedPayloads,
   listUnsupportedBackups,
+  releaseUnpreservedPayload,
   loadUserData,
   reconcileServerSnapshots,
   saveUserData,
@@ -222,5 +224,107 @@ describe('watchPersistedUserData', () => {
     otherTabSaves(key, { ...current, notes: { '1': 'later' } });
     dispatchStorageEvent(key);
     expect(onChange).not.toHaveBeenCalled();
+  });
+});
+
+// Storage full: backups never fit, so newer-version payloads are held in memory instead.
+describe('another tab writing while saving is paused', () => {
+  const first = JSON.stringify({ version: 99, notes: { '1': 'first newer payload' } });
+  const second = JSON.stringify({ version: 99, notes: { '1': 'second newer payload' } });
+
+  const bootBlocked = (key: string) => {
+    const options = { storageKey: key };
+    const setItem = localStorage.setItem.bind(localStorage);
+    vi.spyOn(localStorage, 'setItem').mockImplementation((itemKey: string, value: string) => {
+      if (itemKey.includes('_unsupported_backup')) {
+        throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
+      }
+      setItem(itemKey, value);
+    });
+    localStorage.setItem(key, first);
+    const current = loadUserData(options);
+    expect(isUserDataWriteBlocked(options)).toBe(true);
+    return { options, current };
+  };
+
+  const noticeFor = (options: { storageKey: string }, onWritesResumed = vi.fn()) => {
+    const container = document.createElement('div');
+    renderUnsupportedDataNotice(container, options, { onWritesResumed });
+    const buttons = () => [...container.querySelectorAll('button')];
+    return { container, buttons, onWritesResumed };
+  };
+
+  it('holds a different newer payload too, and downloading the first does not resume saving over it', () => {
+    const { options, current } = bootBlocked('__test_blocked_second_newer__');
+    const onChange = vi.fn();
+    const stop = watchPersistedUserData(() => current, onChange, options);
+    localStorage.setItem(options.storageKey, second);
+    dispatchStorageEvent(options.storageKey);
+    stop();
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(listUnpreservedPayloads(options).map((entry) => entry.payload)).toEqual([first, second]);
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:held');
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    const notice = noticeFor(options);
+    expect(notice.buttons().map((b) => b.textContent)).toEqual([
+      'Download preserved data 1',
+      'Download preserved data 2',
+      'Discard preserved data',
+    ]);
+
+    notice.buttons()[0].click();
+    expect(isUserDataWriteBlocked(options)).toBe(true);
+    expect(notice.onWritesResumed).not.toHaveBeenCalled();
+    expect(saveUserData(createDefaultUserData(), options)).toBe(false);
+    expect(localStorage.getItem(options.storageKey)).toBe(second);
+    expect(notice.container.textContent).toContain('Saving is paused');
+  });
+
+  it('checks the main key on save even before the storage event arrives', () => {
+    const { options } = bootBlocked('__test_blocked_save_check__');
+    localStorage.setItem(options.storageKey, second);
+    releaseUnpreservedPayload(first, options);
+
+    expect(saveUserData(createDefaultUserData(), options)).toBe(false);
+    expect(localStorage.getItem(options.storageKey)).toBe(second);
+    expect(listUnpreservedPayloads(options).map((entry) => entry.payload)).toEqual([second]);
+  });
+
+  it('adopts supported data another tab saved and keeps the held payload downloadable', () => {
+    const { options, current } = bootBlocked('__test_blocked_supported__');
+    let latest = current;
+    const stop = watchPersistedUserData(() => latest, (data) => (latest = data), options);
+    const fromOtherTab = { ...createDefaultUserData(), notes: { '1': 'saved by another tab' } };
+    localStorage.setItem(options.storageKey, JSON.stringify(fromOtherTab));
+    dispatchStorageEvent(options.storageKey);
+    stop();
+
+    expect(latest).toEqual(fromOtherTab);
+    // The held payload is no longer in the main key, so this tab's saves cannot destroy it.
+    expect(isUserDataWriteBlocked(options)).toBe(false);
+    expect(listUnpreservedPayloads(options).map((entry) => entry.payload)).toEqual([first]);
+    const notice = noticeFor(options);
+    expect(notice.buttons().map((b) => b.textContent)).toContain('Download preserved data');
+    expect(notice.container.textContent).toContain('exists only in this page');
+    expect(saveUserData({ ...latest, favorites: ['1'] }, options)).toBe(true);
+    expect(loadUserData(options)).toMatchObject({ notes: { '1': 'saved by another tab' }, favorites: ['1'] });
+  });
+
+  it('releases only the exact payload it is given', () => {
+    const { options } = bootBlocked('__test_blocked_release_exact__');
+    releaseUnpreservedPayload(second, options);
+    expect(isUserDataWriteBlocked(options)).toBe(true);
+
+    localStorage.setItem(options.storageKey, second);
+    saveUserData(createDefaultUserData(), options);
+    releaseUnpreservedPayload(first, options);
+    expect(isUserDataWriteBlocked(options)).toBe(true);
+    expect(localStorage.getItem(options.storageKey)).toBe(second);
+
+    releaseUnpreservedPayload(second, options);
+    expect(isUserDataWriteBlocked(options)).toBe(false);
+    expect(listUnpreservedPayloads(options)).toEqual([]);
   });
 });

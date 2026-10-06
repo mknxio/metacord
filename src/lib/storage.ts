@@ -254,39 +254,60 @@ const payloadVersion = (payload: string): number | null => {
 
 /**
  * Newer-version payloads that could not be copied to a backup key (for example, storage
- * full), by storage key. The main key then holds the only copy, so saveUserData refuses to
- * write it until the user downloads or discards the payload through the data notice.
+ * full), oldest first, by storage key. They are held in memory so the data notice can offer
+ * them for download, and saveUserData never overwrites a main key holding one of them.
  */
-const unpreservedPayloads = new Map<string, string>();
-/** Payloads the user already downloaded or discarded: reloading them must not block again. */
-const releasedPayloads = new Map<string, string>();
+const heldPayloads = new Map<string, string[]>();
+/** Held payloads the user downloaded or discarded: they no longer block saving or get held again. */
+const releasedPayloads = new Map<string, Set<string>>();
 /**
  * The serialized store this tab last read from or wrote to each storage key. Storage holding
  * anything else means another tab saved since (see readPersistedUserData).
  */
 const lastSyncedPayloads = new Map<string, string | null>();
 
-/** The newer-version payload kept only in memory because backing it up failed, if any. */
-export const getUnpreservedPayload = (options?: StorageOptions): UnsupportedBackup | null => {
-  const key = resolveStorageKey(options);
-  const payload = unpreservedPayloads.get(key);
-  return payload === undefined ? null : { key, payload, version: payloadVersion(payload) };
+const isNewerVersionPayload = (payload: string): boolean => {
+  const version = payloadVersion(payload);
+  return version !== null && version > CURRENT_USER_DATA_VERSION;
 };
 
-export const isUserDataWriteBlocked = (options?: StorageOptions): boolean =>
-  unpreservedPayloads.has(resolveStorageKey(options));
+/** Newer-version payloads held only in memory because backing them up failed. */
+export const listUnpreservedPayloads = (options?: StorageOptions): UnsupportedBackup[] => {
+  const key = resolveStorageKey(options);
+  return (heldPayloads.get(key) ?? []).map((payload) => ({ key, payload, version: payloadVersion(payload) }));
+};
+
+/** True while the main key holds a held payload, so saving would destroy its only stored copy. */
+export const isUserDataWriteBlocked = (options?: StorageOptions): boolean => {
+  const key = resolveStorageKey(options);
+  const held = heldPayloads.get(key) ?? [];
+  if (held.length === 0) return false;
+  try {
+    const stored = localStorage.getItem(key);
+    return stored !== null && held.includes(stored);
+  } catch {
+    return true;
+  }
+};
 
 /**
- * Lifts the write block once the user downloaded the unpreserved payload or confirmed
- * discarding it. Discarding also removes it from the main key so a reload does not
- * resurrect it.
+ * Releases exactly `payload` once the user downloaded it or confirmed discarding it; other
+ * held payloads stay held. Discarding also removes it from the main key if it is still there,
+ * so a reload does not resurrect it.
  */
-export const releaseUnpreservedPayload = (options?: StorageOptions, release?: { discard?: boolean }): void => {
+export const releaseUnpreservedPayload = (
+  payload: string,
+  options?: StorageOptions,
+  release?: { discard?: boolean },
+): void => {
   const key = resolveStorageKey(options);
-  const payload = unpreservedPayloads.get(key);
-  if (payload === undefined) return;
-  unpreservedPayloads.delete(key);
-  releasedPayloads.set(key, payload);
+  const held = heldPayloads.get(key) ?? [];
+  if (!held.includes(payload)) return;
+  heldPayloads.set(
+    key,
+    held.filter((item) => item !== payload),
+  );
+  releasedPayloads.set(key, new Set([...(releasedPayloads.get(key) ?? []), payload]));
   if (release?.discard && localStorage.getItem(key) === payload) {
     localStorage.removeItem(key);
   }
@@ -330,12 +351,11 @@ export const discardUnsupportedBackups = (options?: StorageOptions): void => {
  * instead, so it stays the copy until the user downloads or discards it.
  */
 const preserveNewerPayload = (key: string, stored: string, options?: StorageOptions): void => {
+  if (releasedPayloads.get(key)?.has(stored) || heldPayloads.get(key)?.includes(stored)) return;
   try {
     backupUnsupportedPayload(stored, options);
   } catch (backupError) {
-    if (releasedPayloads.get(key) !== stored) {
-      unpreservedPayloads.set(key, stored);
-    }
+    heldPayloads.set(key, [...(heldPayloads.get(key) ?? []), stored]);
     console.error('Failed to preserve newer-version user data; saving is paused', backupError);
   }
 };
@@ -354,8 +374,6 @@ export const loadUserData = (options?: StorageOptions): UserDataStore => {
       preserveNewerPayload(key, stored, options);
       throw new UnsupportedUserDataVersionError(newerVersion);
     }
-    // The main key no longer holds a newer payload: nothing left to protect.
-    unpreservedPayloads.delete(key);
     if (!isRecord(parsed)) {
       return createDefaultUserData();
     }
@@ -367,14 +385,20 @@ export const loadUserData = (options?: StorageOptions): UserDataStore => {
 };
 
 /**
- * Persists user data and returns whether it was written. While a newer-version payload
- * could not be preserved anywhere else (see getUnpreservedPayload), the write is skipped
- * and this returns false: the change stays in memory for this session and the data notice
- * tells the user saving is paused. Storage failures (quota, access denied) still throw.
+ * Persists user data and returns whether it was written. While the main key holds a
+ * newer-version payload that could not be preserved anywhere else (see
+ * listUnpreservedPayloads), the write is skipped and this returns false: the change stays in
+ * memory for this session and the data notice tells the user saving is paused. Storage
+ * failures (quota, access denied) still throw.
  */
 export const saveUserData = (data: UserDataStore, options?: StorageOptions): boolean => {
   const key = resolveStorageKey(options);
-  if (unpreservedPayloads.has(key)) return false;
+  // Another tab may have stored newer-version data this tab has not seen yet.
+  const stored = localStorage.getItem(key);
+  if (stored !== null && stored !== lastSyncedPayloads.get(key) && isNewerVersionPayload(stored)) {
+    preserveNewerPayload(key, stored, options);
+  }
+  if (isUserDataWriteBlocked(options)) return false;
   const payload = JSON.stringify(data);
   localStorage.setItem(key, payload);
   lastSyncedPayloads.set(key, payload);
@@ -384,8 +408,8 @@ export const saveUserData = (data: UserDataStore, options?: StorageOptions): boo
 /**
  * Reads what another tab saved under this storage key since this tab last read or wrote it.
  * `data` is that store, or `current` unchanged when storage did not change (`current` may
- * then hold edits whose save failed), while saving is paused, and when storage holds nothing
- * this version loads. Newer-version data from another tab goes through the same preservation
+ * then hold edits whose save failed or was paused) and when storage holds nothing this
+ * version loads. Payloads held for download stay held when another tab replaces them. Newer-version data from another tab goes through the same preservation
  * as on load (backup, or paused saving) and sets `preservedNewer` so callers can show the
  * notice. The only write is that backup copy.
  */
@@ -395,7 +419,6 @@ const readPersisted = (
 ): { data: UserDataStore; preservedNewer: boolean } => {
   const unchanged = { data: current, preservedNewer: false };
   const key = resolveStorageKey(options);
-  if (unpreservedPayloads.has(key)) return unchanged;
   try {
     const stored = localStorage.getItem(key);
     if (stored === null || stored === lastSyncedPayloads.get(key)) return unchanged;
