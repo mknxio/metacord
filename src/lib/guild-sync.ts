@@ -1,5 +1,5 @@
 import type { ApiGuild } from './api';
-import { reconcileServerSnapshots, saveUserData, type UserDataStore } from './storage';
+import { readPersistedUserData, reconcileServerSnapshots, saveUserData, type UserDataStore } from './storage';
 
 /**
  * `persisted: false` means the reconciled data was not written (quota, storage denied, or
@@ -24,7 +24,8 @@ interface GuildSyncOptions {
  *
  * User data is read through `getUserData` after the fetch settles: the UI stays usable
  * while the list loads, so reconciling a copy captured before the await would overwrite
- * imports or edits made in the meantime.
+ * imports or edits made in the meantime. If another tab saved in the meantime, its
+ * persisted data is reconciled instead (see readPersistedUserData).
  */
 export const syncGuildList = async (
   fetcher: () => Promise<ApiGuild[]>,
@@ -50,7 +51,9 @@ export const syncGuildList = async (
   }
 
   const nowIso = options.now?.() ?? new Date().toISOString();
-  const next = reconcileServerSnapshots(getUserData(), guilds, nowIso);
+  // Another tab may have saved while the list loaded; reconcile its data, not a stale copy.
+  const base = readPersistedUserData(getUserData(), options.storageOptions);
+  const next = reconcileServerSnapshots(base, guilds, nowIso);
   let persisted: boolean;
   try {
     // False while saving is paused to protect unpreserved newer-version data.

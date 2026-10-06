@@ -260,6 +260,11 @@ const payloadVersion = (payload: string): number | null => {
 const unpreservedPayloads = new Map<string, string>();
 /** Payloads the user already downloaded or discarded: reloading them must not block again. */
 const releasedPayloads = new Map<string, string>();
+/**
+ * The serialized store this tab last read from or wrote to each storage key. Storage holding
+ * anything else means another tab saved since (see readPersistedUserData).
+ */
+const lastSyncedPayloads = new Map<string, string | null>();
 
 /** The newer-version payload kept only in memory because backing it up failed, if any. */
 export const getUnpreservedPayload = (options?: StorageOptions): UnsupportedBackup | null => {
@@ -323,6 +328,7 @@ export const loadUserData = (options?: StorageOptions): UserDataStore => {
   const key = resolveStorageKey(options);
   try {
     const stored = localStorage.getItem(key);
+    lastSyncedPayloads.set(key, stored);
     const parsed: unknown = stored ? JSON.parse(stored) : null;
     const newerVersion =
       isRecord(parsed) && typeof parsed.version === 'number' && parsed.version > CURRENT_USER_DATA_VERSION
@@ -363,8 +369,55 @@ export const loadUserData = (options?: StorageOptions): UserDataStore => {
 export const saveUserData = (data: UserDataStore, options?: StorageOptions): boolean => {
   const key = resolveStorageKey(options);
   if (unpreservedPayloads.has(key)) return false;
-  localStorage.setItem(key, JSON.stringify(data));
+  const payload = JSON.stringify(data);
+  localStorage.setItem(key, payload);
+  lastSyncedPayloads.set(key, payload);
   return true;
+};
+
+/**
+ * Returns the user data another tab saved under this storage key since this tab last read or
+ * wrote it, so whole-store saves here do not overwrite it. Returns `current` unchanged when
+ * storage did not change (`current` may then hold edits whose save failed), while saving is
+ * paused, and when storage holds nothing this version loads (empty, invalid or newer-version
+ * data; loadUserData deals with those on the next load). Never writes.
+ */
+export const readPersistedUserData = (current: UserDataStore, options?: StorageOptions): UserDataStore => {
+  const key = resolveStorageKey(options);
+  if (unpreservedPayloads.has(key)) return current;
+  try {
+    const stored = localStorage.getItem(key);
+    if (stored === null || stored === lastSyncedPayloads.get(key)) return current;
+    const parsed: unknown = JSON.parse(stored);
+    if (!isRecord(parsed)) return current;
+    if (typeof parsed.version === 'number' && parsed.version > CURRENT_USER_DATA_VERSION) return current;
+    const data = migrateUserData(sanitizeUserData(parsed));
+    lastSyncedPayloads.set(key, stored);
+    return data;
+  } catch {
+    return current;
+  }
+};
+
+/**
+ * Keeps a long-lived tab in step with saves from other tabs (`storage` events only fire in
+ * the other tabs). Only the given storage key is watched, and the handler only reads, so it
+ * cannot echo a save back. Returns a function that stops watching.
+ */
+export const watchPersistedUserData = (
+  getCurrent: () => UserDataStore,
+  onChange: (data: UserDataStore) => void,
+  options?: StorageOptions,
+): (() => void) => {
+  const key = resolveStorageKey(options);
+  const listener = (event: StorageEvent): void => {
+    if (event.key !== key) return;
+    const current = getCurrent();
+    const next = readPersistedUserData(current, options);
+    if (next !== current) onChange(next);
+  };
+  window.addEventListener('storage', listener);
+  return () => window.removeEventListener('storage', listener);
 };
 
 export const toggleFavorite = (

@@ -21,7 +21,7 @@ import {
 } from './lib/fetch-orchestrator';
 import { hydrateDemo, setupDemoMode } from './lib/demo';
 import { renderUnsupportedDataNotice } from './lib/data-notice';
-import { saveUserData } from './lib/storage';
+import { saveUserData, watchPersistedUserData } from './lib/storage';
 import { setupEvents } from './lib/events';
 
 // --- Error boundary ---
@@ -176,6 +176,15 @@ try {
       }
     },
   });
+  // Adopt saves from other tabs so later whole-store saves here do not overwrite them.
+  watchPersistedUserData(
+    () => state.userData,
+    (data) => {
+      state.userData = data;
+      render();
+    },
+    storageOptions,
+  );
   if (isDemoMode) {
     hydrateDemo();
   } else {
