@@ -3,8 +3,22 @@ import { createModalController } from './components/modal';
 import { createToastManager } from './components/toast';
 import { getElement, isDemoMode, state, storageOptions } from './lib/state';
 import { syncGuildList } from './lib/guild-sync';
-import { initDetailsModal, initSetScreen, initShowToast, render, setScreen, showToast } from './lib/render';
-import { fetchState, initFetchOrchestrator, stopCooldownTimer, stopRateLimitTimer } from './lib/fetch-orchestrator';
+import {
+  initDetailsModal,
+  initSetScreen,
+  initShowToast,
+  initWidgetRateLimit,
+  render,
+  setScreen,
+  showToast,
+} from './lib/render';
+import {
+  fetchState,
+  initFetchOrchestrator,
+  startRateLimitTimer,
+  stopCooldownTimer,
+  stopRateLimitTimer,
+} from './lib/fetch-orchestrator';
 import { hydrateDemo, setupDemoMode } from './lib/demo';
 import { setupEvents } from './lib/events';
 
@@ -79,6 +93,14 @@ initShowToast(toast, appShell);
 initSetScreen(closeAppOverlays);
 initDetailsModal(detailsModal);
 initFetchOrchestrator(fetchModal);
+initWidgetRateLimit({
+  isActive: () => fetchState.rateLimitUntil !== null && fetchState.rateLimitUntil > Date.now(),
+  report: (retryAfterSeconds) => {
+    if (retryAfterSeconds !== null && retryAfterSeconds > 0) {
+      startRateLimitTimer(retryAfterSeconds);
+    }
+  },
+});
 
 // --- Overlays ---
 

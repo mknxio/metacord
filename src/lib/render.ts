@@ -615,12 +615,30 @@ const createReasonField = (guildId: string, label: string): { element: HTMLEleme
   return { element: field, input };
 };
 
+// --- Widget rate-limit coordination ---
+
+/**
+ * Lets Save for later respect and update the toolbar's widget rate-limit window without
+ * importing the fetch orchestrator (which imports this module).
+ */
+export interface WidgetRateLimitHooks {
+  isActive: () => boolean;
+  report: (retryAfterSeconds: number | null) => void;
+}
+
+let _widgetRateLimit: WidgetRateLimitHooks = { isActive: () => false, report: () => {} };
+
+export const initWidgetRateLimit = (hooks: WidgetRateLimitHooks): void => {
+  _widgetRateLimit = hooks;
+};
+
 const formatCount = (value: number | null | undefined): string =>
   typeof value === 'number' ? formatNumber(value) : 'Unknown';
 
 /**
  * Resolves a rejoin invite from the widget: the cached instant invite, otherwise one
- * widget request. Returns null when there is none; AuthError is rethrown for the caller.
+ * widget request (skipped while a rate-limit window is active). Returns null when there
+ * is none; AuthError is rethrown for the caller.
  */
 const resolveWidgetInvite = async (guildId: string, nowIso: string): Promise<InviteSnapshot | null> => {
   const cachedUrl = normalizeInviteUrl(state.userData.widgetCache[guildId]?.instantInvite ?? '');
@@ -628,6 +646,10 @@ const resolveWidgetInvite = async (guildId: string, nowIso: string): Promise<Inv
     return { url: cachedUrl, source: 'widget', capturedAt: nowIso };
   }
   if (isDemoMode) return null;
+  if (_widgetRateLimit.isActive()) {
+    showToast('Rate limited by Discord. Saved without checking the widget invite.', { variant: 'error' });
+    return null;
+  }
   try {
     const widget = await fetchWidget(guildId);
     state.userData = updateWidgetCache(
@@ -645,6 +667,7 @@ const resolveWidgetInvite = async (guildId: string, nowIso: string): Promise<Inv
   } catch (error) {
     if (error instanceof AuthError) throw error;
     if (error instanceof RateLimitError) {
+      _widgetRateLimit.report(error.retryAfter);
       showToast('Rate limited by Discord. Saved without checking the widget invite.', { variant: 'error' });
     } else {
       showToast('Widget unavailable. Saved without a widget invite.', { variant: 'info' });
