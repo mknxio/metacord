@@ -225,14 +225,15 @@ export const unsupportedBackupKey = (options?: StorageOptions): string =>
 const unsupportedBackupSlot = (options: StorageOptions | undefined, index: number): string =>
   index === 1 ? unsupportedBackupKey(options) : `${unsupportedBackupKey(options)}_${index}`;
 
-const backupUnsupportedPayload = (payload: string, options?: StorageOptions): void => {
+/** Returns true when it wrote a new backup, false when this payload was already backed up. */
+const backupUnsupportedPayload = (payload: string, options?: StorageOptions): boolean => {
   for (let index = 1; ; index += 1) {
     const key = unsupportedBackupSlot(options, index);
     const existing = localStorage.getItem(key);
-    if (existing === payload) return;
+    if (existing === payload) return false;
     if (existing === null) {
       localStorage.setItem(key, payload);
-      return;
+      return true;
     }
   }
 };
@@ -345,6 +346,31 @@ export const discardUnsupportedBackups = (options?: StorageOptions): void => {
   }
 };
 
+const newerPayloadListeners = new Set<() => void>();
+
+/**
+ * Runs `listener` whenever newer-version data is newly backed up or held, from any path
+ * (load, cross-tab read, or a save that found it first), so the UI can refresh the data
+ * notice. Returns a function that unsubscribes.
+ */
+export const onNewerPayloadPreserved = (listener: () => void): (() => void) => {
+  newerPayloadListeners.add(listener);
+  return () => {
+    newerPayloadListeners.delete(listener);
+  };
+};
+
+const notifyNewerPayloadPreserved = (): void => {
+  for (const listener of newerPayloadListeners) {
+    try {
+      listener();
+    } catch (error) {
+      // A UI refresh failure must not interrupt the save or load that preserved the data.
+      console.error('Newer-version data listener failed', error);
+    }
+  }
+};
+
 /**
  * Data written by a newer app version: keep an untouched copy so falling back to defaults
  * (and the next save) cannot destroy it. If no copy fits, block writes to the main key
@@ -352,12 +378,15 @@ export const discardUnsupportedBackups = (options?: StorageOptions): void => {
  */
 const preserveNewerPayload = (key: string, stored: string, options?: StorageOptions): void => {
   if (releasedPayloads.get(key)?.has(stored) || heldPayloads.get(key)?.includes(stored)) return;
+  let preserved: boolean;
   try {
-    backupUnsupportedPayload(stored, options);
+    preserved = backupUnsupportedPayload(stored, options);
   } catch (backupError) {
     heldPayloads.set(key, [...(heldPayloads.get(key) ?? []), stored]);
+    preserved = true;
     console.error('Failed to preserve newer-version user data; saving is paused', backupError);
   }
+  if (preserved) notifyNewerPayloadPreserved();
 };
 
 export const loadUserData = (options?: StorageOptions): UserDataStore => {

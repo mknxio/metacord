@@ -9,6 +9,7 @@ import {
   listUnsupportedBackups,
   releaseUnpreservedPayload,
   loadUserData,
+  onNewerPayloadPreserved,
   reconcileServerSnapshots,
   saveUserData,
   watchPersistedUserData,
@@ -326,5 +327,57 @@ describe('another tab writing while saving is paused', () => {
     releaseUnpreservedPayload(second, options);
     expect(isUserDataWriteBlocked(options)).toBe(false);
     expect(listUnpreservedPayloads(options)).toEqual([]);
+  });
+});
+
+describe('onNewerPayloadPreserved', () => {
+  const newer = JSON.stringify({ version: 99, notes: { '1': 'from a newer tab' } });
+
+  it('fires when a save preserves newer data before the storage event arrives', () => {
+    const key = '__test_preserved_on_save__';
+    const options = { storageKey: key };
+    const current = bootTab(key);
+    const container = document.createElement('div');
+    const listener = vi.fn(() => renderUnsupportedDataNotice(container, options));
+    const unsubscribe = onNewerPayloadPreserved(listener);
+
+    localStorage.setItem(key, newer);
+    saveUserData({ ...current, favorites: ['1'] }, options);
+    // The later storage event is ignored (storage matches this tab's save), so the
+    // callback is what surfaces the backup.
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain('schema v99');
+    expect(listUnsupportedBackups(options).map((backup) => backup.payload)).toEqual([newer]);
+
+    // Already preserved: no repeat notification.
+    localStorage.setItem(key, newer);
+    saveUserData(current, options);
+    expect(listener).toHaveBeenCalledTimes(1);
+    unsubscribe();
+  });
+
+  it('fires when the payload is held because no backup fits, and stops after unsubscribing', () => {
+    const key = '__test_preserved_held__';
+    const options = { storageKey: key };
+    const current = bootTab(key);
+    const setItem = localStorage.setItem.bind(localStorage);
+    vi.spyOn(localStorage, 'setItem').mockImplementation((itemKey: string, value: string) => {
+      if (itemKey.includes('_unsupported_backup')) {
+        throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
+      }
+      setItem(itemKey, value);
+    });
+    const listener = vi.fn();
+    const unsubscribe = onNewerPayloadPreserved(listener);
+
+    localStorage.setItem(key, newer);
+    expect(saveUserData(current, options)).toBe(false);
+    expect(listener).toHaveBeenCalledTimes(1);
+    unsubscribe();
+
+    const another = JSON.stringify({ version: 99, notes: { '1': 'another' } });
+    localStorage.setItem(key, another);
+    saveUserData(current, options);
+    expect(listener).toHaveBeenCalledTimes(1);
   });
 });

@@ -21,7 +21,7 @@ import {
 } from './lib/fetch-orchestrator';
 import { hydrateDemo, setupDemoMode } from './lib/demo';
 import { renderUnsupportedDataNotice } from './lib/data-notice';
-import { saveUserData, watchPersistedUserData } from './lib/storage';
+import { onNewerPayloadPreserved, saveUserData, watchPersistedUserData } from './lib/storage';
 import { setupEvents } from './lib/events';
 
 // --- Error boundary ---
@@ -184,6 +184,8 @@ try {
   setupEvents({ importModal, fetchModal, instructionsModal, demoModal, categoriesModal });
   setupDemoMode();
   renderDataNotice();
+  // Includes saves that preserve another tab's newer data before its storage event arrives.
+  onNewerPayloadPreserved(renderDataNotice);
   // Adopt saves from other tabs so later whole-store saves here do not overwrite them.
   watchPersistedUserData(
     () => state.userData,
