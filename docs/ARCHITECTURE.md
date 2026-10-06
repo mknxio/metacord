@@ -26,6 +26,8 @@ Server-side storage retains the minimum session and credential material required
 
 Favorites, names, notes, organization, and other personal context remain user-controlled. The format is schema-versioned and portable through explicit export and import paths so a hosting or runtime change does not strand personal data.
 
+Because the upstream API exposes only current memberships, departed-server history is derived on the client: each complete, successful membership load updates per-server snapshots in this user-owned data, and a server absent from such a load is marked departed. Failed or partial loads never change departure state. Departure is non-destructive; only an explicit, confirmed forget removes a server's snapshot and annotations. Membership facts and rejoin invites can only be captured while the user is still a member, so they are recorded by explicit user action.
+
 ### Shared request coordination and caching
 
 Shared coordination protects constrained upstream requests from unsafe concurrency and observed throttling. Caching reduces repeated work but does not become the authoritative source of membership or personal state.
@@ -86,7 +88,6 @@ Accepted limits:
 
 - Whether the current hosting and runtime remain the best fit once rate-limit behavior, operational evidence, cost, portability, and deployment complexity are compared.
 - Whether the current framework-free client remains the clearest maintainable option as product behavior grows, or a UI framework earns its migration cost.
-- How departed-server history and rejoin information can remain useful when the upstream API exposes only current memberships.
 - What recovery guarantees personal browser-owned data needs beyond manual export and import without turning cloud sync into implicit scope.
 - Which coordination and caching behavior is required by observed upstream limits rather than inherited assumptions.
 - How to prove local, development, and production parity without committing sensitive configuration or personal data.

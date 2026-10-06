@@ -9,9 +9,11 @@ Metacord is a personal Discord server directory, allowing to keep track of curre
 - **Discord OAuth Login** - One-click authentication with PKCE flow
 - **Server List** - View all servers with icons, names, and join dates
 - **Organization** - Favorites, custom nicknames, and personal notes
+- **Server history** - Every successful server-list load keeps a local snapshot (name, icon, member and online counts). Servers missing from a later list move to a **Departed** section with their notes, nickname, favorite and category intact; departure dates are when Metacord noticed, not when you left. Servers left before snapshots existed appear there as "Unknown server" with their ID. **Forget** removes a departed server and all its data after confirmation
+- **Save for later** - From a server's details, capture join date, server nickname, role count, counts, an optional reason, and a rejoin invite (the widget invite when available, otherwise a pasted `discord.gg/…` or `discord.com/invite/…` link) before leaving
 - **Filters** - Partner, Verified, Boosted, Discoverable, Owner
 - **Search** - Filter servers by name in real-time
-- **Export/Import** - Backup and restore your user data (JSON)
+- **Export/Import** - Backup and restore your user data (schema-versioned JSON; older exports are migrated on import, newer ones are rejected)
 - **Demo Mode** - Preview UI without OAuth setup via `?demo=1`
 
 ## Architecture
