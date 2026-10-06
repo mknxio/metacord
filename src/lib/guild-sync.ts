@@ -16,10 +16,14 @@ interface GuildSyncOptions {
  *
  * Departure detection compares against "everything the user is still in", so running it
  * on a failed, unauthorized, or malformed response would mark every server departed.
+ *
+ * User data is read through `getUserData` after the fetch settles: the UI stays usable
+ * while the list loads, so reconciling a copy captured before the await would overwrite
+ * imports or edits made in the meantime.
  */
 export const syncGuildList = async (
   fetcher: () => Promise<ApiGuild[]>,
-  userData: UserDataStore,
+  getUserData: () => UserDataStore,
   options: GuildSyncOptions = {},
 ): Promise<GuildSyncOutcome> => {
   let guilds: ApiGuild[] | null = null;
@@ -37,11 +41,11 @@ export const syncGuildList = async (
 
   // Safety guard: never reconcile snapshots without a successful guild list.
   if (guilds === null) {
-    return { ok: false, error, userData };
+    return { ok: false, error, userData: getUserData() };
   }
 
   const nowIso = options.now?.() ?? new Date().toISOString();
-  const next = reconcileServerSnapshots(userData, guilds, nowIso);
+  const next = reconcileServerSnapshots(getUserData(), guilds, nowIso);
   saveUserData(next, options.storageOptions);
   return { ok: true, guilds, userData: next };
 };

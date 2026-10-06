@@ -116,7 +116,7 @@ const hydrateApp = async (): Promise<void> => {
   setScreen('app');
 
   // Snapshots are reconciled inside syncGuildList only when the list loads successfully.
-  const outcome = await syncGuildList(fetchGuilds, state.userData, { storageOptions });
+  const outcome = await syncGuildList(fetchGuilds, () => state.userData, { storageOptions });
   if (!outcome.ok) {
     if (outcome.error instanceof AuthError) {
       setScreen('login');

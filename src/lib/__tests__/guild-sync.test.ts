@@ -1,7 +1,13 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { AuthError, RateLimitError, type ApiGuild } from '../api';
 import { syncGuildList } from '../guild-sync';
-import { createDefaultUserData, loadUserData, reconcileServerSnapshots, saveUserData } from '../storage';
+import {
+  createDefaultUserData,
+  loadUserData,
+  reconcileServerSnapshots,
+  saveUserData,
+  type UserDataStore,
+} from '../storage';
 
 const TEST_KEY = '__test_guild_sync_key__';
 const storageOptions = { storageKey: TEST_KEY };
@@ -54,7 +60,7 @@ const seededData = () => {
 describe('syncGuildList', () => {
   it('reconciles and persists snapshots after a successful fetch', async () => {
     const data = seededData();
-    const outcome = await syncGuildList(async () => [guild('1')], data, { now: () => T2, storageOptions });
+    const outcome = await syncGuildList(async () => [guild('1')], () => data, { now: () => T2, storageOptions });
     expect(outcome.ok).toBe(true);
     expect(outcome.userData.servers['2'].departedAt).toBe(T2);
     expect(outcome.userData.servers['1'].lastSeenAt).toBe(T2);
@@ -72,7 +78,7 @@ describe('syncGuildList', () => {
   ])('leaves snapshots untouched when the guild list load fails (%s)', async (_label, fetcher) => {
     const data = seededData();
     const stored = localStorage.getItem(TEST_KEY);
-    const outcome = await syncGuildList(fetcher, data, { now: () => T2, storageOptions });
+    const outcome = await syncGuildList(fetcher, () => data, { now: () => T2, storageOptions });
     expect(outcome.ok).toBe(false);
     expect(outcome.userData).toBe(data);
     expect(outcome.userData.servers['1'].departedAt).toBeNull();
@@ -82,12 +88,29 @@ describe('syncGuildList', () => {
   });
 
   it('surfaces the original error so callers can route to login', async () => {
-    const outcome = await syncGuildList(() => Promise.reject(new AuthError()), createDefaultUserData(), {
+    const outcome = await syncGuildList(() => Promise.reject(new AuthError()), () => createDefaultUserData(), {
       storageOptions,
     });
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) {
       expect(outcome.error).toBeInstanceOf(AuthError);
     }
+  });
+
+  it('reconciles the user data current when the fetch resolves, not a stale copy', async () => {
+    let current: UserDataStore = seededData();
+    let resolveFetch: (guilds: ApiGuild[]) => void = () => {};
+    const fetcher = () =>
+      new Promise<ApiGuild[]>((resolve) => {
+        resolveFetch = resolve;
+      });
+    const pending = syncGuildList(fetcher, () => current, { now: () => T2, storageOptions });
+    // An import or category edit lands while the guild list is still loading.
+    current = { ...current, notes: { ...current.notes, '1': 'edited during load' } };
+    resolveFetch([guild('1'), guild('2')]);
+    const outcome = await pending;
+    expect(outcome.ok).toBe(true);
+    expect(outcome.userData.notes['1']).toBe('edited during load');
+    expect(loadUserData(storageOptions).notes['1']).toBe('edited during load');
   });
 });
