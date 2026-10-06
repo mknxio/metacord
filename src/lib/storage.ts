@@ -303,8 +303,18 @@ export const listUnsupportedBackups = (options?: StorageOptions): UnsupportedBac
   return backups;
 };
 
+/**
+ * Removes the preserved payloads. If the main key still holds one of them unchanged (nothing
+ * was saved since it was backed up), that copy goes too, or the next load would back it up
+ * again and bring the notice back. A main key holding anything else is left alone.
+ */
 export const discardUnsupportedBackups = (options?: StorageOptions): void => {
+  const mainKey = resolveStorageKey(options);
+  const main = localStorage.getItem(mainKey);
   for (const backup of listUnsupportedBackups(options)) {
+    if (main !== null && backup.payload === main) {
+      localStorage.removeItem(mainKey);
+    }
     localStorage.removeItem(backup.key);
   }
 };

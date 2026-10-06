@@ -93,6 +93,32 @@ describe('renderUnsupportedDataNotice', () => {
     expect(listUnsupportedBackups(opts)).toHaveLength(0);
     expect(container.classList.contains('hidden')).toBe(true);
   });
+
+  it('stays discarded after a reload when nothing replaced the newer data', () => {
+    // E.g. /api/guilds failed, so no save replaced the newer payload in the main key.
+    preserveNewerData();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderUnsupportedDataNotice(container, opts);
+    [...container.querySelectorAll('button')].find((b) => b.textContent === 'Discard preserved data')?.click();
+    expect(localStorage.getItem(TEST_KEY)).toBeNull();
+
+    loadUserData(opts);
+    expect(listUnsupportedBackups(opts)).toEqual([]);
+    renderUnsupportedDataNotice(container, opts);
+    expect(container.classList.contains('hidden')).toBe(true);
+  });
+
+  it('keeps the main key when it changed after the backup', () => {
+    preserveNewerData();
+    const current = JSON.stringify({ ...createDefaultUserData(), notes: { g1: 'written since' } });
+    saveUserData(JSON.parse(current) as ReturnType<typeof createDefaultUserData>, opts);
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderUnsupportedDataNotice(container, opts);
+    [...container.querySelectorAll('button')].find((b) => b.textContent === 'Discard preserved data')?.click();
+
+    expect(listUnsupportedBackups(opts)).toEqual([]);
+    expect(localStorage.getItem(TEST_KEY)).toBe(current);
+  });
 });
 
 // The write block is module state keyed by storage key, so each test uses its own key.
