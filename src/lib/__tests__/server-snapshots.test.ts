@@ -4,14 +4,19 @@ import {
   discardUnsupportedBackups,
   exportUserData,
   forgetServer,
+  getUnpreservedPayload,
   importUserData,
+  isUserDataWriteBlocked,
   listUnsupportedBackups,
   loadUserData,
   reconcileServerSnapshots,
+  releaseUnpreservedPayload,
   saveServerCapture,
   saveUserData,
+  toggleFavorite,
   unsupportedBackupKey,
   updateDepartureReason,
+  updateNotes,
   UnsupportedUserDataVersionError,
   type ObservedGuild,
   type ServerSnapshot,
@@ -411,5 +416,85 @@ describe('schema v3 migration and portability', () => {
     expect(reimported).toEqual(data);
     expect(reimported.servers.g1.departedAt).toBe(T3);
     expect(reimported.servers.g2.name).toBeNull();
+  });
+});
+
+// The write block is module state keyed by storage key, so each test uses its own key.
+describe('newer-version data that cannot be backed up', () => {
+  const newer = JSON.stringify({ version: 9, favorites: ['future'], notes: { g1: 'irreplaceable' } });
+
+  const failBackupWrites = () => {
+    const setItem = localStorage.setItem.bind(localStorage);
+    vi.spyOn(localStorage, 'setItem').mockImplementation((key: string, value: string) => {
+      if (key.includes('_unsupported_backup')) {
+        throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
+      }
+      setItem(key, value);
+    });
+  };
+
+  beforeEach(() => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+
+  it('never lets a later save overwrite the only copy', () => {
+    const options = { storageKey: '__test_unpreserved_block__' };
+    localStorage.setItem(options.storageKey, newer);
+    failBackupWrites();
+
+    let data = loadUserData(options);
+    expect(data).toEqual(createDefaultUserData());
+    expect(listUnsupportedBackups(options)).toEqual([]);
+    expect(isUserDataWriteBlocked(options)).toBe(true);
+    expect(getUnpreservedPayload(options)).toEqual({ key: options.storageKey, payload: newer, version: 9 });
+
+    data = reconcileServerSnapshots(data, [guild('g1')], T1);
+    saveUserData(data, options);
+    data = toggleFavorite(data, 'g1', options);
+    data = updateNotes(data, 'g1', 'new note', options);
+
+    // Edits stay in memory for the session; storage still holds the newer payload.
+    expect(data.notes.g1).toBe('new note');
+    expect(localStorage.getItem(options.storageKey)).toBe(newer);
+  });
+
+  it('blocks only the storage key whose payload could not be preserved', () => {
+    const blocked = { storageKey: '__test_unpreserved_main__' };
+    const demo = { storageKey: '__test_unpreserved_demo__' };
+    localStorage.setItem(blocked.storageKey, newer);
+    failBackupWrites();
+    loadUserData(blocked);
+
+    saveUserData({ ...createDefaultUserData(), favorites: ['demo'] }, demo);
+    expect(isUserDataWriteBlocked(demo)).toBe(false);
+    expect(loadUserData(demo).favorites).toEqual(['demo']);
+  });
+
+  it('resumes saving once the payload is downloaded, without blocking again on reload', () => {
+    const options = { storageKey: '__test_unpreserved_release__' };
+    localStorage.setItem(options.storageKey, newer);
+    failBackupWrites();
+    loadUserData(options);
+
+    releaseUnpreservedPayload(options);
+    expect(isUserDataWriteBlocked(options)).toBe(false);
+    expect(localStorage.getItem(options.storageKey)).toBe(newer);
+
+    // Reloading the same payload in this session (demo mode reloads) stays unblocked.
+    loadUserData(options);
+    expect(isUserDataWriteBlocked(options)).toBe(false);
+    saveUserData({ ...createDefaultUserData(), favorites: ['after'] }, options);
+    expect(loadUserData(options).favorites).toEqual(['after']);
+  });
+
+  it('removes the payload from the main key when the user discards it', () => {
+    const options = { storageKey: '__test_unpreserved_discard__' };
+    localStorage.setItem(options.storageKey, newer);
+    failBackupWrites();
+    loadUserData(options);
+
+    releaseUnpreservedPayload(options, { discard: true });
+    expect(isUserDataWriteBlocked(options)).toBe(false);
+    expect(localStorage.getItem(options.storageKey)).toBeNull();
   });
 });

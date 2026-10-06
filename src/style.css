@@ -1974,6 +1974,11 @@ input:focus-visible {
   font-size: var(--text-sm);
 }
 
+.data-notice-warning {
+  color: var(--color-text);
+  font-weight: 600;
+}
+
 .data-notice-actions {
   display: flex;
   flex-wrap: wrap;

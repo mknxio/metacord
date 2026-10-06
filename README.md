@@ -13,7 +13,7 @@ Metacord is a personal Discord server directory, allowing to keep track of curre
 - **Save for later** - From a server's details, capture join date, server nickname, role count, counts, an optional reason, and a rejoin invite before leaving: a pasted `discord.gg/…` or `discord.com/invite/…` link when you provide one (useful for a permanent invite), otherwise the server widget's invite when it has one. The widget request is skipped while Discord rate limiting is active
 - **Filters** - Partner, Verified, Boosted, Discoverable, Owner
 - **Search** - Filter servers by name in real-time
-- **Export/Import** - Backup and restore your user data (schema-versioned JSON; older exports are migrated on import, newer ones are rejected). An import replaces your data and is reconciled against the server list already loaded, so imported history shows up without a reload. If this browser holds data from a newer Metacord version, it is preserved rather than loaded, and a notice offers to download or discard it
+- **Export/Import** - Backup and restore your user data (schema-versioned JSON; older exports are migrated on import, newer ones are rejected). An import replaces your data and is reconciled against the server list already loaded, so imported history shows up without a reload. If this browser holds data from a newer Metacord version, it is preserved rather than loaded, and a notice offers to download or discard it; if storage has no room for a separate copy, saving is paused until you download or discard it
 - **Demo Mode** - Preview UI without OAuth setup via `?demo=1`
 
 ## Architecture

@@ -21,6 +21,7 @@ import {
 } from './lib/fetch-orchestrator';
 import { hydrateDemo, setupDemoMode } from './lib/demo';
 import { renderUnsupportedDataNotice } from './lib/data-notice';
+import { saveUserData } from './lib/storage';
 import { setupEvents } from './lib/events';
 
 // --- Error boundary ---
@@ -161,7 +162,17 @@ try {
   setFooterBuildInfo();
   setupEvents({ importModal, fetchModal, instructionsModal, demoModal, categoriesModal });
   setupDemoMode();
-  renderUnsupportedDataNotice(getElement('data-notice'), storageOptions);
+  renderUnsupportedDataNotice(getElement('data-notice'), storageOptions, {
+    // Persist what changed while saving was paused for unpreserved newer-version data.
+    onWritesResumed: () => {
+      try {
+        saveUserData(state.userData, storageOptions);
+      } catch (error) {
+        console.error('Failed to save user data', error);
+        showToast('Unable to save your data in this browser', { variant: 'error' });
+      }
+    },
+  });
   if (isDemoMode) {
     hydrateDemo();
   } else {

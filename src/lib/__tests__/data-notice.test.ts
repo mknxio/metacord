@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { renderUnsupportedDataNotice } from '../data-notice';
-import { listUnsupportedBackups, loadUserData } from '../storage';
+import { createDefaultUserData, isUserDataWriteBlocked, listUnsupportedBackups, loadUserData, saveUserData } from '../storage';
 
 const TEST_KEY = '__test_data_notice_key__';
 const opts = { storageKey: TEST_KEY };
@@ -91,6 +91,75 @@ describe('renderUnsupportedDataNotice', () => {
     confirmSpy.mockReturnValue(true);
     discard()?.click();
     expect(listUnsupportedBackups(opts)).toHaveLength(0);
+    expect(container.classList.contains('hidden')).toBe(true);
+  });
+});
+
+// The write block is module state keyed by storage key, so each test uses its own key.
+describe('renderUnsupportedDataNotice when no backup copy fit', () => {
+  const newer = JSON.stringify({ version: 8, notes: { g1: 'irreplaceable' } });
+
+  const loadWithoutRoomForBackup = (storageKey: string) => {
+    const options = { storageKey };
+    localStorage.setItem(storageKey, newer);
+    const setItem = localStorage.setItem.bind(localStorage);
+    vi.spyOn(localStorage, 'setItem').mockImplementation((key: string, value: string) => {
+      if (key.includes('_unsupported_backup')) {
+        throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
+      }
+      setItem(key, value);
+    });
+    loadUserData(options);
+    return options;
+  };
+
+  const button = (label: string) =>
+    [...container.querySelectorAll('button')].find((b) => b.textContent === label);
+
+  it('says saving is paused and resumes it after the in-memory copy is downloaded', async () => {
+    const options = loadWithoutRoomForBackup('__test_notice_unpreserved_download__');
+    const blobs: Blob[] = [];
+    vi.spyOn(URL, 'createObjectURL').mockImplementation((blob) => {
+      blobs.push(blob as Blob);
+      return 'blob:unpreserved';
+    });
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    const onWritesResumed = vi.fn();
+
+    renderUnsupportedDataNotice(container, options, { onWritesResumed });
+    expect(container.classList.contains('hidden')).toBe(false);
+    expect(container.textContent).toContain('schema v8');
+    expect(container.textContent).toContain('Saving is paused');
+    expect(container.textContent).toContain('not saved');
+
+    // While paused, edits never reach the main key.
+    saveUserData({ ...createDefaultUserData(), favorites: ['edit'] }, options);
+    expect(localStorage.getItem(options.storageKey)).toBe(newer);
+
+    button('Download preserved data')?.click();
+    expect(await blobs[0].text()).toBe(newer);
+    expect(isUserDataWriteBlocked(options)).toBe(false);
+    expect(onWritesResumed).toHaveBeenCalledTimes(1);
+    expect(container.classList.contains('hidden')).toBe(true);
+  });
+
+  it('resumes saving after a confirmed discard only', () => {
+    const options = loadWithoutRoomForBackup('__test_notice_unpreserved_discard__');
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const onWritesResumed = vi.fn();
+    renderUnsupportedDataNotice(container, options, { onWritesResumed });
+
+    button('Discard preserved data')?.click();
+    expect(isUserDataWriteBlocked(options)).toBe(true);
+    expect(localStorage.getItem(options.storageKey)).toBe(newer);
+    expect(onWritesResumed).not.toHaveBeenCalled();
+
+    confirmSpy.mockReturnValue(true);
+    button('Discard preserved data')?.click();
+    expect(isUserDataWriteBlocked(options)).toBe(false);
+    expect(localStorage.getItem(options.storageKey)).toBeNull();
+    expect(onWritesResumed).toHaveBeenCalledTimes(1);
     expect(container.classList.contains('hidden')).toBe(true);
   });
 });

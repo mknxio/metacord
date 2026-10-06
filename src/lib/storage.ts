@@ -243,6 +243,50 @@ export interface UnsupportedBackup {
   version: number | null;
 }
 
+const payloadVersion = (payload: string): number | null => {
+  try {
+    const parsed: unknown = JSON.parse(payload);
+    return isRecord(parsed) && typeof parsed.version === 'number' ? parsed.version : null;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Newer-version payloads that could not be copied to a backup key (for example, storage
+ * full), by storage key. The main key then holds the only copy, so saveUserData refuses to
+ * write it until the user downloads or discards the payload through the data notice.
+ */
+const unpreservedPayloads = new Map<string, string>();
+/** Payloads the user already downloaded or discarded: reloading them must not block again. */
+const releasedPayloads = new Map<string, string>();
+
+/** The newer-version payload kept only in memory because backing it up failed, if any. */
+export const getUnpreservedPayload = (options?: StorageOptions): UnsupportedBackup | null => {
+  const key = resolveStorageKey(options);
+  const payload = unpreservedPayloads.get(key);
+  return payload === undefined ? null : { key, payload, version: payloadVersion(payload) };
+};
+
+export const isUserDataWriteBlocked = (options?: StorageOptions): boolean =>
+  unpreservedPayloads.has(resolveStorageKey(options));
+
+/**
+ * Lifts the write block once the user downloaded the unpreserved payload or confirmed
+ * discarding it. Discarding also removes it from the main key so a reload does not
+ * resurrect it.
+ */
+export const releaseUnpreservedPayload = (options?: StorageOptions, release?: { discard?: boolean }): void => {
+  const key = resolveStorageKey(options);
+  const payload = unpreservedPayloads.get(key);
+  if (payload === undefined) return;
+  unpreservedPayloads.delete(key);
+  releasedPayloads.set(key, payload);
+  if (release?.discard && localStorage.getItem(key) === payload) {
+    localStorage.removeItem(key);
+  }
+};
+
 /** User data from a newer app version that loadUserData preserved instead of loading. */
 export const listUnsupportedBackups = (options?: StorageOptions): UnsupportedBackup[] => {
   const backups: UnsupportedBackup[] = [];
@@ -251,14 +295,7 @@ export const listUnsupportedBackups = (options?: StorageOptions): UnsupportedBac
       const key = unsupportedBackupSlot(options, index);
       const payload = localStorage.getItem(key);
       if (payload === null) break;
-      let version: number | null = null;
-      try {
-        const parsed: unknown = JSON.parse(payload);
-        version = isRecord(parsed) && typeof parsed.version === 'number' ? parsed.version : null;
-      } catch {
-        version = null;
-      }
-      backups.push({ key, payload, version });
+      backups.push({ key, payload, version: payloadVersion(payload) });
     }
   } catch {
     // Storage unavailable: nothing to report.
@@ -273,20 +310,32 @@ export const discardUnsupportedBackups = (options?: StorageOptions): void => {
 };
 
 export const loadUserData = (options?: StorageOptions): UserDataStore => {
+  const key = resolveStorageKey(options);
   try {
-    const stored = localStorage.getItem(resolveStorageKey(options));
-    if (!stored) {
-      return createDefaultUserData();
+    const stored = localStorage.getItem(key);
+    const parsed: unknown = stored ? JSON.parse(stored) : null;
+    const newerVersion =
+      isRecord(parsed) && typeof parsed.version === 'number' && parsed.version > CURRENT_USER_DATA_VERSION
+        ? parsed.version
+        : null;
+    if (stored && newerVersion !== null) {
+      // Data written by a newer app version: keep an untouched copy so falling back to
+      // defaults (and the next save) cannot destroy it. If no copy fits, block writes to
+      // the main key instead, so it stays the copy until the user downloads or discards it.
+      try {
+        backupUnsupportedPayload(stored, options);
+      } catch (backupError) {
+        if (releasedPayloads.get(key) !== stored) {
+          unpreservedPayloads.set(key, stored);
+        }
+        console.error('Failed to preserve newer-version user data; saving is paused', backupError);
+      }
+      throw new UnsupportedUserDataVersionError(newerVersion);
     }
-    const parsed: unknown = JSON.parse(stored);
+    // The main key no longer holds a newer payload: nothing left to protect.
+    unpreservedPayloads.delete(key);
     if (!isRecord(parsed)) {
       return createDefaultUserData();
-    }
-    if (typeof parsed.version === 'number' && parsed.version > CURRENT_USER_DATA_VERSION) {
-      // Data written by a newer app version: keep an untouched copy so falling back to
-      // defaults (and the next save) cannot destroy it.
-      backupUnsupportedPayload(stored, options);
-      throw new UnsupportedUserDataVersionError(parsed.version);
     }
     return migrateUserData(sanitizeUserData(parsed));
   } catch (error) {
@@ -295,8 +344,15 @@ export const loadUserData = (options?: StorageOptions): UserDataStore => {
   }
 };
 
+/**
+ * Persists user data. While a newer-version payload could not be preserved anywhere else
+ * (see getUnpreservedPayload), the write is skipped: the change stays in memory for this
+ * session and the data notice tells the user saving is paused.
+ */
 export const saveUserData = (data: UserDataStore, options?: StorageOptions): void => {
-  localStorage.setItem(resolveStorageKey(options), JSON.stringify(data));
+  const key = resolveStorageKey(options);
+  if (unpreservedPayloads.has(key)) return;
+  localStorage.setItem(key, JSON.stringify(data));
 };
 
 export const toggleFavorite = (
