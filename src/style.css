@@ -1954,6 +1954,32 @@ input:focus-visible {
   margin: 0 0 var(--space-3);
 }
 
+.data-notice {
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius-4);
+  background: var(--color-surface-1);
+  padding: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+
+.data-notice-title {
+  margin: 0 0 var(--space-2);
+  font-family: var(--font-display);
+  font-weight: 600;
+}
+
+.data-notice-body {
+  margin: 0 0 var(--space-3);
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.data-notice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
 .save-later {
   border-top: 1px solid var(--color-border);
   padding-top: var(--space-4);

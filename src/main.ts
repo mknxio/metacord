@@ -20,6 +20,7 @@ import {
   stopRateLimitTimer,
 } from './lib/fetch-orchestrator';
 import { hydrateDemo, setupDemoMode } from './lib/demo';
+import { renderUnsupportedDataNotice } from './lib/data-notice';
 import { setupEvents } from './lib/events';
 
 // --- Error boundary ---
@@ -160,6 +161,7 @@ try {
   setFooterBuildInfo();
   setupEvents({ importModal, fetchModal, instructionsModal, demoModal, categoriesModal });
   setupDemoMode();
+  renderUnsupportedDataNotice(getElement('data-notice'), storageOptions);
   if (isDemoMode) {
     hydrateDemo();
   } else {
