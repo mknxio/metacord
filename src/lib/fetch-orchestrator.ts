@@ -21,6 +21,13 @@ import type { ModalController } from '../components/modal';
 
 export const FETCH_BATCH_SIZE = 5;
 export const FETCH_BATCH_DELAY_MS = 1000;
+/**
+ * Backoff applied when Discord gives no usable retry hint: a 429 without a readable
+ * retry_after, or a whole batch failing at the network layer. In the browser, a response
+ * without CORS headers (for example an edge-level IP ban) surfaces only as a TypeError,
+ * so a fully failed batch is treated as a possible rate limit rather than retried at once.
+ */
+export const FETCH_FALLBACK_BACKOFF_SECONDS = 60;
 
 export const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -202,6 +209,22 @@ export const performWidgetFetch = async (): Promise<void> => {
       })
     );
 
+    // fetch() rejects with a TypeError for network, CORS, and CSP failures.
+    const allNetworkFailures = results.every(
+      (result) => result.status === 'rejected' && result.reason instanceof TypeError
+    );
+    if (allNetworkFailures) {
+      rateLimited = true;
+      fetchInlineBar.classList.add('is-stopped');
+      startRateLimitTimer(FETCH_FALLBACK_BACKOFF_SECONDS);
+      const formatted = formatSecondsRemaining(FETCH_FALLBACK_BACKOFF_SECONDS);
+      showToast(
+        `Could not reach Discord. Requests may be rate limited or blocked. Try again in ${formatted}.`,
+        { variant: 'error' }
+      );
+      return;
+    }
+
     for (const result of results) {
       if (fetchState.shouldStop || rateLimited) break;
 
@@ -232,14 +255,13 @@ export const performWidgetFetch = async (): Promise<void> => {
         if (error instanceof RateLimitError) {
           rateLimited = true;
           fetchInlineBar.classList.add('is-stopped');
-          // Start rate limit timer if we have a retry-after value
-          if (error.retryAfter !== null && error.retryAfter > 0) {
-            startRateLimitTimer(error.retryAfter);
-            const formatted = formatSecondsRemaining(error.retryAfter);
-            showToast(`Rate limited by Discord. Available in ${formatted}.`, { variant: 'error' });
-          } else {
-            showToast('Rate limited by Discord. Try again later.', { variant: 'error' });
-          }
+          const retryAfter =
+            error.retryAfter !== null && error.retryAfter > 0
+              ? error.retryAfter
+              : FETCH_FALLBACK_BACKOFF_SECONDS;
+          startRateLimitTimer(retryAfter);
+          const formatted = formatSecondsRemaining(retryAfter);
+          showToast(`Rate limited by Discord. Available in ${formatted}.`, { variant: 'error' });
           return;
         }
         errors += 1;
