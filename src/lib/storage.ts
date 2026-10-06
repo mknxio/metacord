@@ -221,10 +221,54 @@ const migrateUserData = (data: UserDataStore): UserDataStore => {
 export const unsupportedBackupKey = (options?: StorageOptions): string =>
   `${resolveStorageKey(options)}_unsupported_backup`;
 
+/** Backup slots: the base key, then `_2`, `_3`, … so a later newer payload never replaces an earlier one. */
+const unsupportedBackupSlot = (options: StorageOptions | undefined, index: number): string =>
+  index === 1 ? unsupportedBackupKey(options) : `${unsupportedBackupKey(options)}_${index}`;
+
 const backupUnsupportedPayload = (payload: string, options?: StorageOptions): void => {
-  const key = unsupportedBackupKey(options);
-  if (localStorage.getItem(key) === null) {
-    localStorage.setItem(key, payload);
+  for (let index = 1; ; index += 1) {
+    const key = unsupportedBackupSlot(options, index);
+    const existing = localStorage.getItem(key);
+    if (existing === payload) return;
+    if (existing === null) {
+      localStorage.setItem(key, payload);
+      return;
+    }
+  }
+};
+
+export interface UnsupportedBackup {
+  key: string;
+  payload: string;
+  version: number | null;
+}
+
+/** User data from a newer app version that loadUserData preserved instead of loading. */
+export const listUnsupportedBackups = (options?: StorageOptions): UnsupportedBackup[] => {
+  const backups: UnsupportedBackup[] = [];
+  try {
+    for (let index = 1; ; index += 1) {
+      const key = unsupportedBackupSlot(options, index);
+      const payload = localStorage.getItem(key);
+      if (payload === null) break;
+      let version: number | null = null;
+      try {
+        const parsed: unknown = JSON.parse(payload);
+        version = isRecord(parsed) && typeof parsed.version === 'number' ? parsed.version : null;
+      } catch {
+        version = null;
+      }
+      backups.push({ key, payload, version });
+    }
+  } catch {
+    // Storage unavailable: nothing to report.
+  }
+  return backups;
+};
+
+export const discardUnsupportedBackups = (options?: StorageOptions): void => {
+  for (const backup of listUnsupportedBackups(options)) {
+    localStorage.removeItem(backup.key);
   }
 };
 

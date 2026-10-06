@@ -1,12 +1,15 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   createDefaultUserData,
+  discardUnsupportedBackups,
   exportUserData,
   forgetServer,
   importUserData,
+  listUnsupportedBackups,
   loadUserData,
   reconcileServerSnapshots,
   saveServerCapture,
+  saveUserData,
   unsupportedBackupKey,
   updateDepartureReason,
   UnsupportedUserDataVersionError,
@@ -332,6 +335,30 @@ describe('schema v3 migration and portability', () => {
     const data = loadUserData(opts);
     expect(data).toEqual(createDefaultUserData());
     expect(localStorage.getItem(unsupportedBackupKey(opts))).toBe(newer);
+  });
+
+  it('keeps every distinct newer payload and lists them for the user', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const first = JSON.stringify({ ...v2Payload, version: 4, favorites: ['first'] });
+    const second = JSON.stringify({ ...v2Payload, version: 5, favorites: ['second'] });
+
+    localStorage.setItem(TEST_KEY, first);
+    loadUserData(opts);
+    // The app then saves over the main key (reconcile, edits)...
+    saveUserData(createDefaultUserData(), opts);
+    // ...and a later rollback leaves a different newer payload behind.
+    localStorage.setItem(TEST_KEY, second);
+    loadUserData(opts);
+    // Reloading again with the same payload does not duplicate the backup.
+    loadUserData(opts);
+
+    const backups = listUnsupportedBackups(opts);
+    expect(backups.map((backup) => backup.payload)).toEqual([first, second]);
+    expect(backups.map((backup) => backup.version)).toEqual([4, 5]);
+    expect(backups[0].key).toBe(unsupportedBackupKey(opts));
+
+    discardUnsupportedBackups(opts);
+    expect(listUnsupportedBackups(opts)).toEqual([]);
   });
 
   it('drops invite URLs that are not Discord invites when importing', () => {
