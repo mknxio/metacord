@@ -16,12 +16,31 @@ import {
   deleteCategory,
   moveCategory,
   assignServerToCategory,
+  type ServerSnapshot,
   type UserDataStore,
   type WidgetCacheEntry,
 } from '../storage';
 
 /** Shape of a schema v2 payload (before server snapshots existed). */
 type V2UserData = Omit<UserDataStore, 'servers'>;
+
+const departedSnapshot = (id: string): ServerSnapshot => ({
+  id,
+  name: `Server ${id}`,
+  icon: null,
+  banner: null,
+  owner: false,
+  features: [],
+  firstSeenAt: '2026-10-01T10:00:00.000Z',
+  lastSeenAt: '2026-10-01T10:00:00.000Z',
+  approximateMemberCount: null,
+  approximatePresenceCount: null,
+  membership: null,
+  invite: null,
+  savedAt: null,
+  departedAt: '2026-10-02T10:00:00.000Z',
+  departureReason: null,
+});
 
 // Use a unique key so tests don't collide with default storage
 const TEST_KEY = '__test_storage_key__';
@@ -398,6 +417,20 @@ describe('updateWidgetCache', () => {
 });
 
 describe('clearWidgetCache', () => {
+  it('keeps entries for departed servers, which cannot be refetched', () => {
+    const data = createDefaultUserData();
+    data.widgetCache = {
+      live: { instantInvite: 'https://discord.gg/live', presenceCount: 10, lastCached: null },
+      gone: { instantInvite: 'https://discord.gg/gone', presenceCount: 2, lastCached: null },
+    };
+    data.servers = {
+      live: { ...departedSnapshot('live'), departedAt: null },
+      gone: departedSnapshot('gone'),
+    };
+    const result = clearWidgetCache(data, opts);
+    expect(result.widgetCache).toEqual({ gone: data.widgetCache.gone });
+  });
+
   it('clears all widget cache data', () => {
     const data = createDefaultUserData();
     data.widgetCache = {

@@ -197,6 +197,52 @@ describe('reconcileServerSnapshots', () => {
     reconcileServerSnapshots(data, [], T2);
     expect(JSON.stringify(data)).toBe(before);
   });
+
+  it('captures a cached widget invite as the rejoin invite when a server departs', () => {
+    const data = {
+      ...reconcileServerSnapshots(createDefaultUserData(), [guild('1'), guild('2')], T1),
+      widgetCache: {
+        '1': { instantInvite: 'https://discord.gg/widget1', presenceCount: 3, lastCached: T1 },
+        '2': { instantInvite: 'https://discord.gg/still-here', presenceCount: 3, lastCached: T1 },
+      },
+    };
+    const next = reconcileServerSnapshots(data, [guild('2')], T2);
+    expect(next.servers['1'].invite).toEqual({ url: 'https://discord.gg/widget1', source: 'widget', capturedAt: T1 });
+    expect(next.servers['2'].invite).toBeNull();
+  });
+
+  it('backfills the widget invite for servers that departed earlier', () => {
+    const departed = reconcileServerSnapshots(
+      reconcileServerSnapshots(createDefaultUserData(), [guild('1')], T1),
+      [],
+      T2,
+    );
+    expect(departed.servers['1'].invite).toBeNull();
+    const withCache = {
+      ...departed,
+      widgetCache: { '1': { instantInvite: 'https://discord.gg/old', presenceCount: null, lastCached: 'not a date' } },
+    };
+    const next = reconcileServerSnapshots(withCache, [], T3);
+    // An unusable lastCached falls back to the reconciliation time.
+    expect(next.servers['1'].invite).toEqual({ url: 'https://discord.gg/old', source: 'widget', capturedAt: T3 });
+    expect(next.servers['1'].departedAt).toBe(T2);
+  });
+
+  it('keeps an existing invite and ignores invalid widget invites', () => {
+    const manual = { url: 'https://discord.gg/manual', source: 'manual' as const, capturedAt: T1 };
+    let data = reconcileServerSnapshots(createDefaultUserData(), [guild('1'), guild('2')], T1);
+    data = {
+      ...data,
+      servers: { ...data.servers, '1': { ...data.servers['1'], invite: manual } },
+      widgetCache: {
+        '1': { instantInvite: 'https://discord.gg/widget', presenceCount: null, lastCached: T1 },
+        '2': { instantInvite: 'javascript:alert(1)', presenceCount: null, lastCached: T1 },
+      },
+    };
+    const next = reconcileServerSnapshots(data, [], T2);
+    expect(next.servers['1'].invite).toEqual(manual);
+    expect(next.servers['2'].invite).toBeNull();
+  });
 });
 
 describe('saveServerCapture', () => {

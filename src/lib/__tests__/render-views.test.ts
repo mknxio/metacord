@@ -24,7 +24,7 @@ import {
   UNKNOWN_SERVER_NAME,
 } from '../render';
 import { addDemoServerExamples, DEMO_DEPARTED_EXAMPLE_ID } from '../demo';
-import { createDefaultUserData, reconcileServerSnapshots } from '../storage';
+import { clearWidgetCache, createDefaultUserData, reconcileServerSnapshots } from '../storage';
 import type { ApiGuild } from '../api';
 
 const T1 = '2026-10-01T10:00:00.000Z';
@@ -134,6 +134,19 @@ describe('buildDepartedViews', () => {
     };
     expect(buildDepartedViews().find((view) => view.id === 'gone')?.departure?.inviteUrl).toBe(
       'https://discord.gg/rejoin',
+    );
+  });
+
+  it('still offers the cached widget invite after a forced widget cache clear', () => {
+    setup();
+    // A departure recorded before invites were copied from the widget cache.
+    state.userData = {
+      ...state.userData,
+      widgetCache: { gone: { instantInvite: 'https://discord.gg/cached', presenceCount: null, lastCached: T1 } },
+    };
+    state.userData = clearWidgetCache(state.userData);
+    expect(buildDepartedViews().find((view) => view.id === 'gone')?.departure?.inviteUrl).toBe(
+      'https://discord.gg/cached',
     );
   });
 

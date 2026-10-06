@@ -530,7 +530,11 @@ export const updateWidgetCache = (
 };
 
 export const clearWidgetCache = (data: UserDataStore, options?: StorageOptions): UserDataStore => {
-  const next = { ...data, widgetCache: {} };
+  // Departed servers cannot be refetched: keep their entries (a rejoin invite fallback).
+  const widgetCache = Object.fromEntries(
+    Object.entries(data.widgetCache).filter(([guildId]) => (data.servers[guildId]?.departedAt ?? null) !== null),
+  );
+  const next = { ...data, widgetCache };
   saveUserData(next, options);
   return next;
 };
@@ -755,6 +759,14 @@ const snapshotFromGuild = (
  * marked departed, and annotation-only guild IDs become unknown-name departed records.
  * Pure: callers must only pass a list from a successful fetch and persist the result.
  */
+const inviteFromWidgetCache = (entry: WidgetCacheEntry | undefined, nowIso: string): InviteSnapshot | null => {
+  const url = normalizeInviteUrl(entry?.instantInvite ?? '');
+  if (!url) return null;
+  const lastCached = entry?.lastCached;
+  const capturedAt = lastCached && !Number.isNaN(Date.parse(lastCached)) ? lastCached : nowIso;
+  return { url, source: 'widget', capturedAt };
+};
+
 export const reconcileServerSnapshots = (
   data: UserDataStore,
   guilds: readonly ObservedGuild[],
@@ -778,6 +790,14 @@ export const reconcileServerSnapshots = (
     if (!presentIds.has(guildId) && !servers[guildId]) {
       servers[guildId] = createUnknownDepartedSnapshot(guildId, nowIso);
     }
+  }
+
+  // Departed servers can no longer be refetched, so a cached widget invite becomes their
+  // captured rejoin invite (on departure, and as a backfill for earlier departures).
+  for (const [guildId, snapshot] of Object.entries(servers)) {
+    if (snapshot.departedAt === null || snapshot.invite !== null) continue;
+    const invite = inviteFromWidgetCache(data.widgetCache[guildId], nowIso);
+    if (invite) servers[guildId] = { ...snapshot, invite };
   }
 
   return { ...data, servers };
