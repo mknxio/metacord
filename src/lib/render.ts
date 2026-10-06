@@ -16,6 +16,7 @@ import {
   updateDepartureReason,
   updateWidgetCache,
   type InviteSnapshot,
+  type MembershipSnapshot,
   type ServerSnapshot,
   type WidgetCacheEntry,
 } from './storage';
@@ -688,9 +689,35 @@ const describeSavedStatus = (snapshot: ServerSnapshot | undefined): string => {
   return `${parts.join(' · ')}.`;
 };
 
+const toMembershipSnapshot = (member: ApiGuildMember, capturedAt: string): MembershipSnapshot => ({
+  joinedAt: member.joined_at ?? null,
+  nickname: member.nickname ?? null,
+  roleCount: member.roles?.length ?? 0,
+  capturedAt,
+});
+
+/**
+ * Refresh capture fetches membership again rather than re-stamping what the modal loaded.
+ * Returns null (saveServerCapture then keeps the previous capture and its timestamp) when
+ * that fetch fails; AuthError is rethrown for the caller.
+ */
+const fetchFreshMembership = async (guildId: string): Promise<MembershipSnapshot | null> => {
+  if (isDemoMode) return null;
+  try {
+    const fresh = await fetchGuildMember(guildId);
+    return toMembershipSnapshot(fresh, new Date().toISOString());
+  } catch (error) {
+    if (error instanceof AuthError) throw error;
+    showToast('Membership details could not be refreshed; kept the previous capture.', { variant: 'info' });
+    return null;
+  }
+};
+
+/** `memberReceivedAt` is when `member` (loaded with the modal) arrived; it dates that capture. */
 const createSaveForLaterSection = (
   guild: ApiGuild,
   member: ApiGuildMember | null,
+  memberReceivedAt: string | null,
 ): { element: HTMLElement; reasonInput: HTMLTextAreaElement } => {
   const guildId = guild.id;
   const section = createElement('section', 'save-later');
@@ -766,10 +793,16 @@ const createSaveForLaterSection = (
       invite = { url, source: 'manual', capturedAt: nowIso };
     }
 
+    const wasSaved = Boolean(state.userData.servers[guildId]?.savedAt);
+    let membership: MembershipSnapshot | null =
+      member && memberReceivedAt ? toMembershipSnapshot(member, memberReceivedAt) : null;
     captureButton.disabled = true;
     try {
       if (!invite) {
         invite = await resolveWidgetInvite(guildId, nowIso);
+      }
+      if (wasSaved) {
+        membership = await fetchFreshMembership(guildId);
       }
     } catch (error) {
       if (error instanceof AuthError) {
@@ -781,15 +814,6 @@ const createSaveForLaterSection = (
       captureButton.disabled = false;
     }
 
-    const wasSaved = Boolean(state.userData.servers[guildId]?.savedAt);
-    const membership = member
-      ? {
-          joinedAt: member.joined_at ?? null,
-          nickname: member.nickname ?? null,
-          roleCount: member.roles?.length ?? 0,
-          capturedAt: nowIso,
-        }
-      : null;
     state.userData = saveServerCapture(
       state.userData,
       guild,
@@ -911,9 +935,11 @@ export const openDetails = async (guildId: string): Promise<void> => {
   _detailsModal?.open();
 
   let member: ApiGuildMember | null = null;
+  let memberReceivedAt: string | null = null;
   if (!isDemoMode) {
     try {
       member = await fetchGuildMember(guildId);
+      memberReceivedAt = new Date().toISOString();
     } catch (error) {
       if (error instanceof AuthError) {
         setScreen('login');
@@ -988,7 +1014,7 @@ export const openDetails = async (guildId: string): Promise<void> => {
   const annotations = createAnnotationFields(guildId);
   detailsBody.appendChild(annotations.element);
 
-  const saveForLater = createSaveForLaterSection(server, member);
+  const saveForLater = createSaveForLaterSection(server, member, memberReceivedAt);
   detailsBody.appendChild(saveForLater.element);
 
   const actions = createElement('div', 'modal-actions');

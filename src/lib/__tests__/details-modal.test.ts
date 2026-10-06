@@ -226,6 +226,77 @@ describe('Save for later', () => {
   });
 });
 
+describe('membership capture timestamps', () => {
+  const OPENED_AT = '2026-10-05T09:00:00.000Z';
+  const CLICKED_AT = '2026-10-05T09:30:00.000Z';
+  const oldMembership = { joinedAt: '2024-01-02T00:00:00.000Z', nickname: 'Old Nick', roleCount: 1, capturedAt: T1 };
+
+  const seedSavedLive = () => {
+    state.userData = {
+      ...state.userData,
+      servers: {
+        ...state.userData.servers,
+        [LIVE_ID]: { ...state.userData.servers[LIVE_ID], savedAt: T1, membership: oldMembership },
+      },
+    };
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(OPENED_AT));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('dates a first save\'s membership by when the modal received it', async () => {
+    const { button } = await openLiveDetails();
+    vi.setSystemTime(new Date(CLICKED_AT));
+    await clickAndSettle(button);
+    expect(mockedFetchGuildMember).toHaveBeenCalledTimes(1);
+    expect(state.userData.servers[LIVE_ID].membership).toMatchObject({ nickname: 'Nick', capturedAt: OPENED_AT });
+    expect(state.userData.servers[LIVE_ID].savedAt).toBe(CLICKED_AT);
+  });
+
+  it('fetches membership again on Refresh capture and saves the fresh response', async () => {
+    seedSavedLive();
+    const { button } = await openLiveDetails();
+    expect(button.textContent).toBe('Refresh capture');
+    mockedFetchGuildMember.mockResolvedValueOnce({ ...member, nickname: 'Fresh Nick', roles: ['r1'] });
+    vi.setSystemTime(new Date(CLICKED_AT));
+    await clickAndSettle(button);
+    expect(mockedFetchGuildMember).toHaveBeenCalledTimes(2);
+    expect(state.userData.servers[LIVE_ID].membership).toEqual({
+      joinedAt: member.joined_at,
+      nickname: 'Fresh Nick',
+      roleCount: 1,
+      capturedAt: CLICKED_AT,
+    });
+  });
+
+  it('keeps the previous capture and its timestamp when the refresh fetch fails', async () => {
+    seedSavedLive();
+    const { button } = await openLiveDetails();
+    mockedFetchGuildMember.mockRejectedValueOnce(new Error('Request failed: 500'));
+    vi.setSystemTime(new Date(CLICKED_AT));
+    await clickAndSettle(button);
+    expect(mockedFetchGuildMember).toHaveBeenCalledTimes(2);
+    expect(state.userData.servers[LIVE_ID].membership).toEqual(oldMembership);
+    expect(state.userData.servers[LIVE_ID].savedAt).toBe(T1);
+  });
+
+  it('routes to login when the refresh fetch finds the session expired', async () => {
+    seedSavedLive();
+    const before = state.userData;
+    const { button } = await openLiveDetails();
+    mockedFetchGuildMember.mockRejectedValueOnce(new AuthError());
+    await clickAndSettle(button);
+    expect(state.userData).toBe(before);
+    expect(document.getElementById('login-screen')?.classList.contains('hidden')).toBe(false);
+  });
+});
+
 describe('departed details modal', () => {
   it('shows captured data without calling live Discord endpoints', async () => {
     await openDetails(DEPARTED_ID);
