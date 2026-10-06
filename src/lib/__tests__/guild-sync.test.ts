@@ -62,7 +62,7 @@ describe('syncGuildList', () => {
   it('reconciles and persists snapshots after a successful fetch', async () => {
     const data = seededData();
     const outcome = await syncGuildList(async () => [guild('1')], () => data, { now: () => T2, storageOptions });
-    expect(outcome.ok).toBe(true);
+    expect(outcome).toMatchObject({ ok: true, persisted: true });
     expect(outcome.userData.servers['2'].departedAt).toBe(T2);
     expect(outcome.userData.servers['1'].lastSeenAt).toBe(T2);
     expect(outcome.userData.servers.orphan).toMatchObject({ name: null, departedAt: T2 });
@@ -86,6 +86,43 @@ describe('syncGuildList', () => {
     expect(outcome.userData.servers['2'].departedAt).toBeNull();
     expect(outcome.userData.servers.orphan).toBeUndefined();
     expect(localStorage.getItem(TEST_KEY)).toBe(stored);
+  });
+
+  // A storage failure must not abort hydration: the fetched list still renders this session.
+  it('returns the fetched list and reconciled history when saving them fails', async () => {
+    const data = seededData();
+    const stored = localStorage.getItem(TEST_KEY);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(localStorage, 'setItem').mockImplementation(() => {
+      throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
+    });
+    const outcome = await syncGuildList(async () => [guild('1')], () => data, { now: () => T2, storageOptions });
+    expect(outcome).toMatchObject({ ok: true, persisted: false, guilds: [guild('1')] });
+    expect(outcome.userData.servers['2'].departedAt).toBe(T2);
+    expect(outcome.userData.servers.orphan).toMatchObject({ name: null, departedAt: T2 });
+    expect(localStorage.getItem(TEST_KEY)).toBe(stored);
+  });
+
+  it('reports history as not persisted while saving is paused for newer-version data', async () => {
+    const pausedOptions = { storageKey: '__test_guild_sync_paused__' };
+    const newer = JSON.stringify({ version: 9, notes: { '1': 'irreplaceable' } });
+    localStorage.setItem(pausedOptions.storageKey, newer);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const setItem = localStorage.setItem.bind(localStorage);
+    vi.spyOn(localStorage, 'setItem').mockImplementation((key: string, value: string) => {
+      if (key.includes('_unsupported_backup')) {
+        throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
+      }
+      setItem(key, value);
+    });
+    const data = loadUserData(pausedOptions);
+    const outcome = await syncGuildList(async () => [guild('1')], () => data, {
+      now: () => T2,
+      storageOptions: pausedOptions,
+    });
+    expect(outcome).toMatchObject({ ok: true, persisted: false });
+    expect(outcome.userData.servers['1'].lastSeenAt).toBe(T2);
+    expect(localStorage.getItem(pausedOptions.storageKey)).toBe(newer);
   });
 
   it('surfaces the original error so callers can route to login', async () => {

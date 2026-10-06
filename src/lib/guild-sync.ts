@@ -1,8 +1,13 @@
 import type { ApiGuild } from './api';
 import { reconcileServerSnapshots, saveUserData, type UserDataStore } from './storage';
 
+/**
+ * `persisted: false` means the reconciled data was not written (quota, storage denied, or
+ * saving paused for unpreserved newer-version data);
+ * it is still returned so the session shows the list and history, but will not survive a reload.
+ */
 export type GuildSyncOutcome =
-  | { ok: true; guilds: ApiGuild[]; userData: UserDataStore }
+  | { ok: true; guilds: ApiGuild[]; userData: UserDataStore; persisted: boolean }
   | { ok: false; error: unknown; userData: UserDataStore };
 
 interface GuildSyncOptions {
@@ -46,8 +51,16 @@ export const syncGuildList = async (
 
   const nowIso = options.now?.() ?? new Date().toISOString();
   const next = reconcileServerSnapshots(getUserData(), guilds, nowIso);
-  saveUserData(next, options.storageOptions);
-  return { ok: true, guilds, userData: next };
+  let persisted: boolean;
+  try {
+    // False while saving is paused to protect unpreserved newer-version data.
+    persisted = saveUserData(next, options.storageOptions);
+  } catch (saveError) {
+    // A storage failure must not hide a guild list that loaded fine.
+    console.error('Failed to save server history', saveError);
+    persisted = false;
+  }
+  return { ok: true, guilds, userData: next, persisted };
 };
 
 /**

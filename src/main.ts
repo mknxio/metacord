@@ -153,6 +153,9 @@ const hydrateApp = async (): Promise<void> => {
   state.guildListLoaded = true;
   state.userData = outcome.userData;
   render();
+  if (!outcome.persisted) {
+    showToast('Server history could not be saved in this browser', { variant: 'error' });
+  }
 };
 
 // --- Boot ---

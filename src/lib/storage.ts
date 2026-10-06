@@ -345,14 +345,16 @@ export const loadUserData = (options?: StorageOptions): UserDataStore => {
 };
 
 /**
- * Persists user data. While a newer-version payload could not be preserved anywhere else
- * (see getUnpreservedPayload), the write is skipped: the change stays in memory for this
- * session and the data notice tells the user saving is paused.
+ * Persists user data and returns whether it was written. While a newer-version payload
+ * could not be preserved anywhere else (see getUnpreservedPayload), the write is skipped
+ * and this returns false: the change stays in memory for this session and the data notice
+ * tells the user saving is paused. Storage failures (quota, access denied) still throw.
  */
-export const saveUserData = (data: UserDataStore, options?: StorageOptions): void => {
+export const saveUserData = (data: UserDataStore, options?: StorageOptions): boolean => {
   const key = resolveStorageKey(options);
-  if (unpreservedPayloads.has(key)) return;
+  if (unpreservedPayloads.has(key)) return false;
   localStorage.setItem(key, JSON.stringify(data));
+  return true;
 };
 
 export const toggleFavorite = (
