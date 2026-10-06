@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { AuthError, RateLimitError, type ApiGuild } from '../api';
-import { reconcileImportedUserData, syncGuildList } from '../guild-sync';
+import { importReconciledUserData, syncGuildList } from '../guild-sync';
 import {
   createDefaultUserData,
-  importUserData,
   loadUserData,
   reconcileServerSnapshots,
   saveUserData,
+  UnsupportedUserDataVersionError,
   type UserDataStore,
 } from '../storage';
 
@@ -153,7 +153,7 @@ describe('syncGuildList', () => {
   });
 });
 
-describe('reconcileImportedUserData', () => {
+describe('importReconciledUserData', () => {
   const v2Export = {
     version: 2,
     favorites: ['1'],
@@ -166,20 +166,52 @@ describe('reconcileImportedUserData', () => {
   };
 
   it('recovers imported orphan annotations and snapshots current servers when a list is loaded', () => {
-    const imported = importUserData(v2Export, storageOptions);
-    const next = reconcileImportedUserData(imported, [guild('1')], T2, storageOptions);
+    const next = importReconciledUserData(v2Export, [guild('1')], T2, storageOptions);
     expect(next.servers['1']).toMatchObject({ name: 'Server 1', departedAt: null, lastSeenAt: T2 });
     expect(next.servers.gone).toMatchObject({ name: null, departedAt: T2 });
     expect(next.notes).toEqual(v2Export.notes);
-    expect(loadUserData(storageOptions).servers.gone?.departedAt).toBe(T2);
+    expect(loadUserData(storageOptions)).toEqual(next);
   });
 
-  it('leaves imported data untouched when no guild list has loaded yet', () => {
-    const imported = importUserData(v2Export, storageOptions);
-    const stored = localStorage.getItem(TEST_KEY);
-    const next = reconcileImportedUserData(imported, null, T2, storageOptions);
-    expect(next).toBe(imported);
+  it('saves the import unreconciled when no guild list has loaded yet', () => {
+    const next = importReconciledUserData(v2Export, null, T2, storageOptions);
     expect(next.servers).toEqual({});
+    expect(next.notes).toEqual(v2Export.notes);
+    expect(loadUserData(storageOptions)).toEqual(next);
+  });
+
+  it('saves exactly once, after reconciliation', () => {
+    const setItem = vi.spyOn(localStorage, 'setItem');
+    importReconciledUserData(v2Export, [guild('1')], T2, storageOptions);
+    expect(setItem).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(setItem.mock.calls[0][1]).servers.gone).toMatchObject({ departedAt: T2 });
+  });
+
+  it('leaves stored data untouched when the save fails', () => {
+    const data = seededData();
+    const stored = localStorage.getItem(TEST_KEY);
+    // Only the reconciled store (larger: it adds snapshots) exceeds the quota.
+    const setItem = localStorage.setItem.bind(localStorage);
+    vi.spyOn(localStorage, 'setItem').mockImplementation((key: string, value: string) => {
+      if (Object.keys(JSON.parse(value).servers ?? {}).length > 0) {
+        throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
+      }
+      setItem(key, value);
+    });
+    expect(() => importReconciledUserData(v2Export, [guild('1')], T2, storageOptions)).toThrow('quota');
+    expect(localStorage.getItem(TEST_KEY)).toBe(stored);
+    expect(loadUserData(storageOptions)).toEqual(data);
+  });
+
+  it('rejects invalid and newer-version files without saving', () => {
+    seededData();
+    const stored = localStorage.getItem(TEST_KEY);
+    expect(() => importReconciledUserData({ nope: true }, [guild('1')], T2, storageOptions)).toThrow(
+      'Invalid user data format',
+    );
+    expect(() => importReconciledUserData({ ...v2Export, version: 99 }, [guild('1')], T2, storageOptions)).toThrow(
+      UnsupportedUserDataVersionError,
+    );
     expect(localStorage.getItem(TEST_KEY)).toBe(stored);
   });
 });

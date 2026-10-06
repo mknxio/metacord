@@ -540,13 +540,17 @@ const isValidUserData = (value: unknown): value is UserDataStore => {
   return true;
 };
 
-export const importUserData = (raw: unknown, options?: StorageOptions): UserDataStore => {
+/** Validates, sanitizes and migrates an imported file without persisting it. */
+export const parseUserDataImport = (raw: unknown): UserDataStore => {
   if (!isValidUserData(raw)) {
     throw new Error('Invalid user data format');
   }
+  // Throws UnsupportedUserDataVersionError for files from a newer version.
+  return migrateUserData(sanitizeUserData(raw as unknown as Record<string, unknown>));
+};
 
-  // Throws UnsupportedUserDataVersionError before anything is persisted.
-  const sanitized: UserDataStore = migrateUserData(sanitizeUserData(raw as unknown as Record<string, unknown>));
+export const importUserData = (raw: unknown, options?: StorageOptions): UserDataStore => {
+  const sanitized = parseUserDataImport(raw);
   saveUserData(sanitized, options);
   return sanitized;
 };

@@ -1,5 +1,11 @@
 import type { ApiGuild } from './api';
-import { readPersistedUserData, reconcileServerSnapshots, saveUserData, type UserDataStore } from './storage';
+import {
+  parseUserDataImport,
+  readPersistedUserData,
+  reconcileServerSnapshots,
+  saveUserData,
+  type UserDataStore,
+} from './storage';
 
 /**
  * `persisted: false` means the reconciled data was not written (quota, storage denied, or
@@ -67,20 +73,23 @@ export const syncGuildList = async (
 };
 
 /**
- * Reconciles freshly imported user data against the guild list already loaded this
- * session, so imported history (orphan annotations, snapshots for servers left on another
- * device) shows up without a reload. `loadedGuilds` is null when no list has loaded
- * successfully yet; reconciling then would mark every server departed, so the imported
- * data is returned unchanged and the next successful load reconciles it.
+ * Imports a user data file: validates it, reconciles it against the guild list already
+ * loaded this session (so imported history such as orphan annotations or snapshots for
+ * servers left on another device shows up without a reload), then saves once.
+ *
+ * `loadedGuilds` is null when no list has loaded successfully yet; reconciling then would
+ * mark every server departed, so the imported data is saved as is and the next successful
+ * load reconciles it. Any failure (invalid file, newer version, storage full) throws before
+ * storage changes, so the caller keeps its pre-import state.
  */
-export const reconcileImportedUserData = (
-  imported: UserDataStore,
+export const importReconciledUserData = (
+  raw: unknown,
   loadedGuilds: ApiGuild[] | null,
   nowIso: string,
   storageOptions?: { storageKey?: string },
 ): UserDataStore => {
-  if (loadedGuilds === null) return imported;
-  const next = reconcileServerSnapshots(imported, loadedGuilds, nowIso);
+  const imported = parseUserDataImport(raw);
+  const next = loadedGuilds === null ? imported : reconcileServerSnapshots(imported, loadedGuilds, nowIso);
   saveUserData(next, storageOptions);
   return next;
 };

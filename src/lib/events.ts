@@ -1,6 +1,5 @@
 import { logout } from './api';
 import {
-  importUserData,
   exportUserData,
   toggleFavorite,
   saveUserData,
@@ -10,7 +9,7 @@ import {
   moveCategory,
 } from './storage';
 import { createElement } from './utils';
-import { reconcileImportedUserData } from './guild-sync';
+import { importReconciledUserData } from './guild-sync';
 import type { ModalController } from '../components/modal';
 import {
   BUILTIN_SECTIONS,
@@ -139,8 +138,9 @@ const handleImport = async (file: File): Promise<boolean> => {
   try {
     const content = await file.text();
     const parsed: unknown = JSON.parse(content);
-    state.userData = reconcileImportedUserData(
-      importUserData(parsed, storageOptions),
+    // Saves once, after reconciliation; on any failure state and storage keep the old data.
+    state.userData = importReconciledUserData(
+      parsed,
       state.guildListLoaded ? state.guilds : null,
       new Date().toISOString(),
       storageOptions,
