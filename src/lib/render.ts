@@ -445,7 +445,8 @@ export const render = (): void => {
   renderSection('public', publicServers);
   renderSection('private', privateServers);
 
-  const departed = buildDepartedViews().filter((server) =>
+  const allDeparted = buildDepartedViews();
+  const departed = allDeparted.filter((server) =>
     matchesFilter(server, state.activeFilters) && matchesSearch(server, state.search.trim()),
   ).sort(comparator);
   renderSection('departed', departed);
@@ -465,15 +466,17 @@ export const render = (): void => {
   statOwned.textContent = `${ownedTotal}`;
   statPublic.textContent = `${publicTotal}`;
 
-  emptyState.classList.toggle('hidden', allViews.length > 0);
+  // Search feedback and the empty state cover every rendered card, departed ones included.
+  const cardTotal = allViews.length + allDeparted.length;
+  emptyState.classList.toggle('hidden', cardTotal > 0);
   searchHelper.classList.toggle('hidden', state.search.trim().length > 0);
 
   // Update filter count badge
   const filterCount = document.getElementById('filter-count');
   if (filterCount) {
     const hasActiveFilters = state.activeFilters.size > 0 || state.search.trim().length > 0;
-    if (hasActiveFilters && allViews.length > 0) {
-      filterCount.textContent = `${filtered.length} of ${allViews.length} servers`;
+    if (hasActiveFilters && cardTotal > 0) {
+      filterCount.textContent = `${filtered.length + departed.length} of ${cardTotal} servers`;
       filterCount.classList.remove('hidden');
     } else {
       filterCount.textContent = '';
