@@ -14,7 +14,7 @@
 - API: Hono application behind a Cloudflare Worker entry point.
 - Authentication: Discord OAuth with PKCE; tokens are encrypted server-side and referenced by an HttpOnly session cookie.
 - Persistence: Workers KV for sessions, browser storage for personal annotations, and portable JSON export/import.
-- Upstream coordination: a Durable Object coordinates Discord widget requests.
+- Upstream access: credentialed Discord calls go through the Worker API; the browser fetches public guild widget data directly from Discord without credentials, in paced batches that back off on 429.
 - Package manager: pnpm, pinned by `packageManager` in `package.json`.
 
 This list describes the code as it exists. It does not override the technology-neutral architecture or pre-decide the open frontend and hosting reviews.

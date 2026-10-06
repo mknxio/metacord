@@ -20,6 +20,7 @@ Metacord is a personal Discord server directory, allowing to keep track of curre
 - **Backend**: Hono catch-all router in a Workers entry (`/api/*`)
 - **Auth**: Discord OAuth with PKCE, AES-GCM encrypted tokens in Workers KV
 - **Storage**: KV for sessions, localStorage for user preferences
+- **Widget data**: fetched by the browser directly from Discord's public widget endpoint, without credentials
 
 ## Project Operating Model
 
