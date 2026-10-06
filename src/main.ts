@@ -1,7 +1,8 @@
 import { AuthError, fetchGuilds, fetchMe } from './lib/api';
 import { createModalController } from './components/modal';
 import { createToastManager } from './components/toast';
-import { getElement, isDemoMode, state } from './lib/state';
+import { getElement, isDemoMode, state, storageOptions } from './lib/state';
+import { syncGuildList } from './lib/guild-sync';
 import { initDetailsModal, initSetScreen, initShowToast, render, setScreen, showToast } from './lib/render';
 import { fetchState, initFetchOrchestrator, stopCooldownTimer, stopRateLimitTimer } from './lib/fetch-orchestrator';
 import { hydrateDemo, setupDemoMode } from './lib/demo';
@@ -114,16 +115,19 @@ const hydrateApp = async (): Promise<void> => {
 
   setScreen('app');
 
-  try {
-    state.guilds = await fetchGuilds();
-    render();
-  } catch (error) {
-    if (error instanceof AuthError) {
+  // Snapshots are reconciled inside syncGuildList only when the list loads successfully.
+  const outcome = await syncGuildList(fetchGuilds, state.userData, { storageOptions });
+  if (!outcome.ok) {
+    if (outcome.error instanceof AuthError) {
       setScreen('login');
       return;
     }
     showToast('Unable to load servers', { variant: 'error' });
+    return;
   }
+  state.guilds = outcome.guilds;
+  state.userData = outcome.userData;
+  render();
 };
 
 // --- Boot ---

@@ -12,6 +12,7 @@ import {
 import { createElement } from './utils';
 import type { ModalController } from '../components/modal';
 import {
+  BUILTIN_SECTIONS,
   type FilterKey,
   type SectionKey,
   type SortKey,
@@ -122,7 +123,7 @@ const toggleSectionCollapse = (sectionKey: SectionKey): void => {
 
 const initializeSectionStates = (): void => {
   const sections = getSections();
-  (['favorites', 'owned', 'public', 'private'] as const).forEach((key) => {
+  BUILTIN_SECTIONS.forEach((key) => {
     const section = sections[key];
     if (!section) return;
 

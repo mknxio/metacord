@@ -340,6 +340,28 @@
             </div>
           </section>
 
+          <section class="section hidden" id="departed-section">
+            <button
+              class="section-header"
+              type="button"
+              data-collapse-toggle="departed"
+              aria-expanded="true"
+              aria-controls="departed-content"
+            >
+              <div class="section-header-left">
+                <span class="section-chevron" aria-hidden="true">&#9662;</span>
+                <h2>Departed</h2>
+              </div>
+              <span class="count-pill" id="departed-count">0</span>
+            </button>
+            <div class="section-content" id="departed-content">
+              <p class="section-note muted">
+                Servers missing from your latest server list. Departure dates are when Metacord noticed, not when you left.
+              </p>
+              <div class="server-grid" id="departed-list"></div>
+            </div>
+          </section>
+
           <section class="empty-state" id="empty-state" aria-live="polite">
             <h3>No servers yet</h3>
             <p>Once you sign in, your server list appears here.</p>

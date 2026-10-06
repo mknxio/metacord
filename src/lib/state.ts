@@ -1,7 +1,7 @@
 import { loadUserData, type UserDataStore } from './storage';
 
 export type FilterKey = 'all' | 'owned' | 'partner' | 'verified' | 'boosted' | 'discoverable';
-export type BuiltinSectionKey = 'favorites' | 'owned' | 'public' | 'private';
+export type BuiltinSectionKey = 'favorites' | 'owned' | 'public' | 'private' | 'departed';
 export type DynamicSectionKey = `category-${string}`;
 export type SectionKey = BuiltinSectionKey | DynamicSectionKey;
 export type SortKey = 'name-asc' | 'name-desc' | 'online-desc';
@@ -61,9 +61,9 @@ export const getElement = <T extends HTMLElement>(selector: string): T => {
 export const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
-const BUILTIN_SECTIONS: BuiltinSectionKey[] = ['favorites', 'owned', 'public', 'private'];
+export const BUILTIN_SECTIONS: BuiltinSectionKey[] = ['favorites', 'owned', 'public', 'private', 'departed'];
 
-const isValidSectionKey = (value: string): value is SectionKey =>
+export const isValidSectionKey = (value: string): value is SectionKey =>
   (BUILTIN_SECTIONS as readonly string[]).includes(value) || value.startsWith('category-');
 
 export const loadCollapsedSections = (): Set<SectionKey> => {

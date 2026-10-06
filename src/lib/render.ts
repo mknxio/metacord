@@ -1,5 +1,9 @@
 import {
   AuthError,
+  RateLimitError,
+  fetchGuildMember,
+  fetchWidget,
+  type ApiGuild,
   type ApiGuildMember,
 } from './api';
 import {
@@ -7,13 +11,24 @@ import {
   updateNickname,
   updateNotes,
   assignServerToCategory,
+  forgetServer,
+  saveServerCapture,
+  updateDepartureReason,
+  updateWidgetCache,
+  type InviteSnapshot,
+  type ServerSnapshot,
   type WidgetCacheEntry,
 } from './storage';
-import { createServerCard, type ServerView, type ServerCardOptions } from '../components/serverCard';
+import {
+  createInviteLink,
+  createServerCard,
+  formatDate,
+  type ServerCardOptions,
+  type ServerView,
+} from '../components/serverCard';
 import type { ModalController } from '../components/modal';
 import type { ToastManager } from '../components/toast';
-import { createElement, getIconUrl } from './utils';
-import { fetchGuildMember } from './api';
+import { createElement, formatNumber, getIconUrl, normalizeInviteUrl } from './utils';
 import {
   type DynamicSectionKey,
   type FilterKey,
@@ -94,19 +109,73 @@ export const getWidgetView = (guildId: string): WidgetCacheEntry | null => {
   return state.userData.widgetCache[guildId] ?? null;
 };
 
+export const UNKNOWN_SERVER_NAME = 'Unknown server';
+
 export const buildServerViews = (): ServerView[] => {
-  return state.guilds.map((guild) => ({
-    id: guild.id,
-    name: guild.name,
-    icon: guild.icon ?? null,
-    banner: guild.banner ?? null,
-    owner: guild.owner,
-    features: guild.features ?? [],
-    nickname: state.userData.nicknames[guild.id],
-    notes: state.userData.notes[guild.id],
-    isFavorite: state.userData.favorites.includes(guild.id),
-    widget: getWidgetView(guild.id),
-  }));
+  return state.guilds.map((guild) => {
+    const widget = getWidgetView(guild.id);
+    const snapshot = state.userData.servers[guild.id];
+    return {
+      id: guild.id,
+      name: guild.name,
+      icon: guild.icon ?? null,
+      banner: guild.banner ?? null,
+      owner: guild.owner,
+      features: guild.features ?? [],
+      nickname: state.userData.nicknames[guild.id],
+      notes: state.userData.notes[guild.id],
+      isFavorite: state.userData.favorites.includes(guild.id),
+      widget,
+      onlineCount: guild.approximate_presence_count ?? widget?.presenceCount ?? null,
+      memberCount: guild.approximate_member_count ?? snapshot?.approximateMemberCount ?? null,
+      isSaved: Boolean(snapshot?.savedAt),
+    };
+  });
+};
+
+const getDepartedSnapshot = (guildId: string): ServerSnapshot | null => {
+  const snapshot = state.userData.servers[guildId];
+  if (!snapshot || snapshot.departedAt === null) return null;
+  if (state.guilds.some((guild) => guild.id === guildId)) return null;
+  return snapshot;
+};
+
+/** Rejoin invite for a departed server: the captured invite, else a cached widget invite. */
+const getRejoinInvite = (snapshot: ServerSnapshot): string | null =>
+  normalizeInviteUrl(snapshot.invite?.url ?? '') ??
+  normalizeInviteUrl(state.userData.widgetCache[snapshot.id]?.instantInvite ?? '');
+
+const getCategoryName = (guildId: string): string | null => {
+  const categoryId = state.userData.serverCategories[guildId];
+  return state.userData.categories.find((category) => category.id === categoryId)?.name ?? null;
+};
+
+export const buildDepartedViews = (): ServerView[] => {
+  const liveIds = new Set(state.guilds.map((guild) => guild.id));
+  return Object.values(state.userData.servers)
+    .filter((snapshot) => snapshot.departedAt !== null && !liveIds.has(snapshot.id))
+    .map((snapshot) => ({
+      id: snapshot.id,
+      name: snapshot.name ?? UNKNOWN_SERVER_NAME,
+      icon: snapshot.icon,
+      banner: snapshot.banner,
+      owner: snapshot.owner,
+      features: snapshot.features,
+      nickname: state.userData.nicknames[snapshot.id],
+      notes: state.userData.notes[snapshot.id],
+      isFavorite: state.userData.favorites.includes(snapshot.id),
+      widget: null,
+      onlineCount: snapshot.approximatePresenceCount,
+      memberCount: snapshot.approximateMemberCount,
+      isSaved: snapshot.savedAt !== null,
+      departure: {
+        departedAt: snapshot.departedAt ?? '',
+        reason: snapshot.departureReason,
+        inviteUrl: getRejoinInvite(snapshot),
+        isUnknown: snapshot.name === null,
+        categoryName: getCategoryName(snapshot.id),
+      },
+    }));
 };
 
 export const matchesSingleFilter = (server: ServerView, filter: FilterKey): boolean => {
@@ -181,8 +250,8 @@ export const getSortComparator = (sortKey: SortKey): ((a: ServerView, b: ServerV
       };
     case 'online-desc':
       return (a, b) => {
-        const countA = a.widget?.presenceCount ?? -1;
-        const countB = b.widget?.presenceCount ?? -1;
+        const countA = a.onlineCount ?? -1;
+        const countB = b.onlineCount ?? -1;
         if (countA !== countB) return countB - countA;
         return getDisplayName(a).localeCompare(getDisplayName(b));
       };
@@ -217,6 +286,21 @@ export const toggleSelection = (guildId: string): void => {
   render();
 };
 
+export const confirmForget = (guildId: string): boolean => {
+  const snapshot = getDepartedSnapshot(guildId);
+  if (!snapshot) return false;
+  const label = state.userData.nicknames[guildId] ?? snapshot.name ?? `${UNKNOWN_SERVER_NAME} (${guildId})`;
+  const confirmed = confirm(
+    `Forget "${label}"? This permanently removes its saved snapshot, notes, nickname, favorite, category and cached widget data.`,
+  );
+  if (!confirmed) return false;
+  state.userData = forgetServer(state.userData, guildId, storageOptions);
+  state.selectedIds.delete(guildId);
+  showToast('Server forgotten');
+  render();
+  return true;
+};
+
 const renderSection = (key: string, servers: ServerView[]): void => {
   const sections = getSections();
   const section = sections[key];
@@ -229,7 +313,8 @@ const renderSection = (key: string, servers: ServerView[]): void => {
   }
   section.section.classList.remove('hidden');
   servers.forEach((server) => {
-    const cardOptions: ServerCardOptions | undefined = state.selectionMode
+    // Departed servers are never part of bulk selection.
+    const cardOptions: ServerCardOptions | undefined = state.selectionMode && !server.departure
       ? { selectionMode: true, isSelected: state.selectedIds.has(server.id) }
       : undefined;
     section.list.appendChild(
@@ -245,6 +330,7 @@ const renderSection = (key: string, servers: ServerView[]): void => {
         },
         onOpenDetails: (guildId) => openDetails(guildId),
         onToggleSelection: (guildId) => toggleSelection(guildId),
+        onForget: server.departure ? (guildId) => confirmForget(guildId) : undefined,
       }, cardOptions),
     );
   });
@@ -358,6 +444,11 @@ export const render = (): void => {
   renderSection('public', publicServers);
   renderSection('private', privateServers);
 
+  const departed = buildDepartedViews().filter((server) =>
+    matchesFilter(server, state.activeFilters) && matchesSearch(server, state.search.trim()),
+  ).sort(comparator);
+  renderSection('departed', departed);
+
   const statTotal = getElement<HTMLElement>('stat-total');
   const statFavorites = getElement<HTMLElement>('stat-favorites');
   const statOwned = getElement<HTMLElement>('stat-owned');
@@ -411,9 +502,384 @@ export const render = (): void => {
 
 // --- Details modal ---
 
+const createDetailsHeader = (
+  guildId: string,
+  name: string,
+  iconHash: string | null,
+  fallbackInitial: string,
+): HTMLElement => {
+  const header = createElement('div', 'details-header');
+  const icon = createElement('div', 'details-icon');
+  const iconUrl = getIconUrl(guildId, iconHash);
+  if (iconUrl) {
+    const image = document.createElement('img');
+    image.src = iconUrl;
+    image.alt = `${name} icon`;
+    image.onerror = () => image.remove();
+    icon.appendChild(image);
+  } else {
+    icon.textContent = fallbackInitial;
+  }
+  header.appendChild(icon);
+
+  const headerText = createElement('div', 'details-title');
+  headerText.appendChild(createElement('h4', '', name));
+  const idRow = createElement('div', 'details-id-row');
+  const idText = createElement('span', 'muted', `ID: ${guildId}`);
+  const copyButton = createElement('button', 'btn btn-secondary', 'Copy ID');
+  copyButton.type = 'button';
+  copyButton.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(guildId);
+      showToast('Server ID copied');
+    } catch {
+      showToast('Unable to copy ID', { variant: 'error' });
+    }
+  });
+  idRow.append(idText, copyButton);
+  headerText.appendChild(idRow);
+  header.appendChild(headerText);
+  return header;
+};
+
+interface AnnotationFields {
+  element: HTMLElement;
+  save: () => void;
+}
+
+/** Nickname, notes and category inputs shared by current and departed servers. */
+const createAnnotationFields = (guildId: string): AnnotationFields => {
+  const element = createElement('div', 'details-annotations');
+
+  const nicknameField = createElement('div', 'form-field');
+  const nicknameLabel = createElement('label', '', 'Nickname');
+  nicknameLabel.setAttribute('for', 'nickname-input');
+  const nicknameInput = document.createElement('input');
+  nicknameInput.id = 'nickname-input';
+  nicknameInput.type = 'text';
+  nicknameInput.value = state.userData.nicknames[guildId] ?? '';
+  nicknameField.append(nicknameLabel, nicknameInput);
+  element.appendChild(nicknameField);
+
+  const notesField = createElement('div', 'form-field');
+  const notesLabel = createElement('label', '', 'Notes');
+  notesLabel.setAttribute('for', 'notes-input');
+  const notesInput = document.createElement('textarea');
+  notesInput.id = 'notes-input';
+  notesInput.value = state.userData.notes[guildId] ?? '';
+  notesField.append(notesLabel, notesInput);
+  element.appendChild(notesField);
+
+  const categoryField = createElement('div', 'form-field');
+  const categoryLabel = createElement('label', '', 'Category');
+  categoryLabel.setAttribute('for', 'category-select');
+  const categorySelect = document.createElement('select');
+  categorySelect.id = 'category-select';
+  categorySelect.className = 'sort-select';
+
+  const noneOption = document.createElement('option');
+  noneOption.value = '';
+  noneOption.textContent = 'None';
+  categorySelect.appendChild(noneOption);
+
+  const sortedCats = [...state.userData.categories].sort((a, b) => a.order - b.order);
+  for (const cat of sortedCats) {
+    const opt = document.createElement('option');
+    opt.value = cat.id;
+    opt.textContent = cat.name;
+    categorySelect.appendChild(opt);
+  }
+  categorySelect.value = state.userData.serverCategories[guildId] ?? '';
+  categoryField.append(categoryLabel, categorySelect);
+  element.appendChild(categoryField);
+
+  const save = (): void => {
+    state.userData = updateNickname(state.userData, guildId, nicknameInput.value, storageOptions);
+    state.userData = updateNotes(state.userData, guildId, notesInput.value, storageOptions);
+    const selectedCategory = categorySelect.value || null;
+    state.userData = assignServerToCategory(state.userData, guildId, selectedCategory, storageOptions);
+  };
+
+  return { element, save };
+};
+
+const createReasonField = (guildId: string, label: string): { element: HTMLElement; input: HTMLTextAreaElement } => {
+  const field = createElement('div', 'form-field');
+  const reasonLabel = createElement('label', '', label);
+  reasonLabel.setAttribute('for', 'departure-reason-input');
+  const input = document.createElement('textarea');
+  input.id = 'departure-reason-input';
+  input.maxLength = 500;
+  input.value = state.userData.servers[guildId]?.departureReason ?? '';
+  field.append(reasonLabel, input);
+  return { element: field, input };
+};
+
+const formatCount = (value: number | null | undefined): string =>
+  typeof value === 'number' ? formatNumber(value) : 'Unknown';
+
+/**
+ * Resolves a rejoin invite from the widget: the cached instant invite, otherwise one
+ * widget request. Returns null when there is none; AuthError is rethrown for the caller.
+ */
+const resolveWidgetInvite = async (guildId: string, nowIso: string): Promise<InviteSnapshot | null> => {
+  const cachedUrl = normalizeInviteUrl(state.userData.widgetCache[guildId]?.instantInvite ?? '');
+  if (cachedUrl) {
+    return { url: cachedUrl, source: 'widget', capturedAt: nowIso };
+  }
+  if (isDemoMode) return null;
+  try {
+    const widget = await fetchWidget(guildId);
+    state.userData = updateWidgetCache(
+      state.userData,
+      guildId,
+      {
+        instantInvite: widget.instant_invite ?? null,
+        presenceCount: widget.presence_count ?? null,
+        lastCached: nowIso,
+      },
+      storageOptions,
+    );
+    const url = normalizeInviteUrl(widget.instant_invite ?? '');
+    return url ? { url, source: 'widget', capturedAt: nowIso } : null;
+  } catch (error) {
+    if (error instanceof AuthError) throw error;
+    if (error instanceof RateLimitError) {
+      showToast('Rate limited by Discord. Saved without checking the widget invite.', { variant: 'error' });
+    } else {
+      showToast('Widget unavailable. Saved without a widget invite.', { variant: 'info' });
+    }
+    return null;
+  }
+};
+
+const describeSavedStatus = (snapshot: ServerSnapshot | undefined): string => {
+  if (!snapshot?.savedAt) {
+    return 'Not saved. Saving captures your membership details, server counts and a rejoin invite so they survive leaving.';
+  }
+  const parts = [`Saved ${formatDate(snapshot.savedAt)}`];
+  if (snapshot.membership) {
+    parts.push(`membership captured ${formatDate(snapshot.membership.capturedAt)}`);
+  }
+  parts.push(snapshot.invite ? 'rejoin invite captured' : 'no rejoin invite');
+  return `${parts.join(' · ')}.`;
+};
+
+const createSaveForLaterSection = (
+  guild: ApiGuild,
+  member: ApiGuildMember | null,
+): { element: HTMLElement; reasonInput: HTMLTextAreaElement } => {
+  const guildId = guild.id;
+  const section = createElement('section', 'save-later');
+  section.setAttribute('aria-labelledby', 'save-later-title');
+  const title = createElement('h5', 'save-later-title', 'Save for later');
+  title.id = 'save-later-title';
+  section.appendChild(title);
+
+  const status = createElement('p', 'muted save-later-status');
+  status.setAttribute('role', 'status');
+  status.textContent = describeSavedStatus(state.userData.servers[guildId]);
+  section.appendChild(status);
+
+  const currentInvite = createElement('p', 'save-later-invite');
+  const renderCurrentInvite = (): void => {
+    currentInvite.replaceChildren();
+    const invite = state.userData.servers[guildId]?.invite;
+    const link = createInviteLink(invite?.url, 'text-link', invite?.url ?? '', 'Open captured rejoin invite');
+    if (invite && link) {
+      currentInvite.append(`Captured invite (${invite.source}): `, link);
+    }
+  };
+  renderCurrentInvite();
+  section.appendChild(currentInvite);
+
+  const inviteField = createElement('div', 'form-field');
+  const inviteLabel = createElement('label', '', 'Rejoin invite (optional)');
+  inviteLabel.setAttribute('for', 'invite-input');
+  const inviteInput = document.createElement('input');
+  inviteInput.id = 'invite-input';
+  inviteInput.type = 'url';
+  inviteInput.placeholder = 'https://discord.gg/…';
+  inviteInput.autocomplete = 'off';
+  const existingInvite = state.userData.servers[guildId]?.invite;
+  inviteInput.value = existingInvite?.source === 'manual' ? existingInvite.url : '';
+  const inviteHelp = createElement(
+    'p',
+    'muted form-help',
+    'Leave empty to use the server widget invite when available. Accepts discord.gg/… and discord.com/invite/… links.',
+  );
+  inviteHelp.id = 'invite-help';
+  inviteInput.setAttribute('aria-describedby', 'invite-help invite-error');
+  const inviteError = createElement('p', 'form-error');
+  inviteError.id = 'invite-error';
+  inviteError.setAttribute('role', 'alert');
+  inviteField.append(inviteLabel, inviteInput, inviteHelp, inviteError);
+  section.appendChild(inviteField);
+
+  const reason = createReasonField(guildId, 'Why you might leave (optional)');
+  section.appendChild(reason.element);
+
+  const captureButton = createElement('button', 'btn btn-secondary');
+  captureButton.type = 'button';
+  const updateButtonLabel = (): void => {
+    captureButton.textContent = state.userData.servers[guildId]?.savedAt ? 'Refresh capture' : 'Save for later';
+  };
+  updateButtonLabel();
+
+  captureButton.addEventListener('click', async () => {
+    inviteError.textContent = '';
+    inviteInput.removeAttribute('aria-invalid');
+    const nowIso = new Date().toISOString();
+    let invite: InviteSnapshot | null = null;
+    const pasted = inviteInput.value.trim();
+    if (pasted.length > 0) {
+      const url = normalizeInviteUrl(pasted);
+      if (!url) {
+        inviteError.textContent = 'Enter a discord.gg/… or discord.com/invite/… link.';
+        inviteInput.setAttribute('aria-invalid', 'true');
+        inviteInput.focus();
+        return;
+      }
+      invite = { url, source: 'manual', capturedAt: nowIso };
+    }
+
+    captureButton.disabled = true;
+    try {
+      if (!invite) {
+        invite = await resolveWidgetInvite(guildId, nowIso);
+      }
+    } catch (error) {
+      if (error instanceof AuthError) {
+        setScreen('login');
+        return;
+      }
+      throw error;
+    } finally {
+      captureButton.disabled = false;
+    }
+
+    const wasSaved = Boolean(state.userData.servers[guildId]?.savedAt);
+    const membership = member
+      ? {
+          joinedAt: member.joined_at ?? null,
+          nickname: member.nickname ?? null,
+          roleCount: member.roles?.length ?? 0,
+          capturedAt: nowIso,
+        }
+      : null;
+    state.userData = saveServerCapture(
+      state.userData,
+      guild,
+      { membership, invite, departureReason: reason.input.value },
+      nowIso,
+      storageOptions,
+    );
+    status.textContent = describeSavedStatus(state.userData.servers[guildId]);
+    renderCurrentInvite();
+    updateButtonLabel();
+    showToast(wasSaved ? 'Capture refreshed' : 'Saved for later', { variant: 'success' });
+    render();
+  });
+  section.appendChild(captureButton);
+  return { element: section, reasonInput: reason.input };
+};
+
+const openDepartedDetails = (snapshot: ServerSnapshot): void => {
+  const guildId = snapshot.id;
+  const detailsBody = getElement<HTMLElement>('details-body');
+  detailsBody.replaceChildren();
+  const name = snapshot.name ?? UNKNOWN_SERVER_NAME;
+  detailsBody.appendChild(
+    createDetailsHeader(guildId, name, snapshot.icon, snapshot.name ? snapshot.name.charAt(0).toUpperCase() : '?'),
+  );
+
+  // Captured data only: departed servers never trigger live Discord requests.
+  const meta = createElement('div', 'details-meta');
+  meta.appendChild(createElement('div', 'detail-row', `Left (noticed) ${formatDate(snapshot.departedAt ?? '')}`));
+  if (snapshot.lastSeenAt) {
+    meta.appendChild(createElement('div', 'detail-row', `Last seen: ${formatDate(snapshot.lastSeenAt)}`));
+  } else {
+    meta.appendChild(
+      createElement('div', 'detail-row', 'Left before Metacord kept server history; only your annotations remain.'),
+    );
+  }
+  if (snapshot.firstSeenAt) {
+    meta.appendChild(createElement('div', 'detail-row', `First seen: ${formatDate(snapshot.firstSeenAt)}`));
+  }
+  if (snapshot.savedAt) {
+    meta.appendChild(createElement('div', 'detail-row', `Saved for later: ${formatDate(snapshot.savedAt)}`));
+  }
+  meta.appendChild(
+    createElement(
+      'div',
+      'detail-row',
+      `Members: ${formatCount(snapshot.approximateMemberCount)} · Online: ${formatCount(snapshot.approximatePresenceCount)} (last seen)`,
+    ),
+  );
+  if (snapshot.membership) {
+    const joined = snapshot.membership.joinedAt ? formatDate(snapshot.membership.joinedAt) : 'Unknown';
+    meta.appendChild(createElement('div', 'detail-row', `Joined: ${joined}`));
+    meta.appendChild(
+      createElement('div', 'detail-row', `Server nickname: ${snapshot.membership.nickname ?? 'None'}`),
+    );
+    meta.appendChild(createElement('div', 'detail-row', `Roles: ${snapshot.membership.roleCount}`));
+    meta.appendChild(
+      createElement('div', 'detail-row muted', `Membership captured ${formatDate(snapshot.membership.capturedAt)}`),
+    );
+  } else {
+    meta.appendChild(createElement('div', 'detail-row muted', 'No membership details were captured before leaving.'));
+  }
+  detailsBody.appendChild(meta);
+
+  const rejoinUrl = getRejoinInvite(snapshot);
+  const rejoin = createInviteLink(rejoinUrl, 'btn btn-primary', 'Rejoin', `Rejoin ${name} (opens Discord invite)`);
+  if (rejoin) {
+    const rejoinRow = createElement('div', 'details-rejoin');
+    rejoinRow.appendChild(rejoin);
+    detailsBody.appendChild(rejoinRow);
+  } else {
+    detailsBody.appendChild(createElement('p', 'muted', 'No rejoin invite was captured.'));
+  }
+
+  const annotations = createAnnotationFields(guildId);
+  detailsBody.appendChild(annotations.element);
+  const reason = createReasonField(guildId, 'Departure reason');
+  detailsBody.appendChild(reason.element);
+
+  const actions = createElement('div', 'modal-actions');
+  const saveButton = createElement('button', 'btn btn-primary', 'Save');
+  saveButton.type = 'button';
+  saveButton.addEventListener('click', () => {
+    annotations.save();
+    state.userData = updateDepartureReason(state.userData, guildId, reason.input.value, storageOptions);
+    showToast('Details saved');
+    render();
+    _detailsModal?.close();
+  });
+  const forgetButton = createElement('button', 'btn btn-danger', 'Forget');
+  forgetButton.type = 'button';
+  forgetButton.addEventListener('click', () => {
+    if (confirmForget(guildId)) {
+      _detailsModal?.close();
+    }
+  });
+  const cancelButton = createElement('button', 'btn btn-secondary', 'Cancel');
+  cancelButton.type = 'button';
+  cancelButton.addEventListener('click', () => _detailsModal?.close());
+  actions.append(saveButton, forgetButton, cancelButton);
+  detailsBody.appendChild(actions);
+  _detailsModal?.open();
+};
+
 export const openDetails = async (guildId: string): Promise<void> => {
   const server = state.guilds.find((item) => item.id === guildId);
-  if (!server) return;
+  if (!server) {
+    const departed = getDepartedSnapshot(guildId);
+    if (departed) {
+      openDepartedDetails(departed);
+    }
+    return;
+  }
   const detailsBody = getElement<HTMLElement>('details-body');
   detailsBody.replaceChildren();
 
@@ -436,39 +902,9 @@ export const openDetails = async (guildId: string): Promise<void> => {
   }
 
   detailsBody.replaceChildren();
-
-  const header = createElement('div', 'details-header');
-  const icon = createElement('div', 'details-icon');
-  const iconUrl = getIconUrl(server.id, server.icon ?? null);
-  if (iconUrl) {
-    const image = document.createElement('img');
-    image.src = iconUrl;
-    image.alt = `${server.name} icon`;
-    image.onerror = () => image.remove();
-    icon.appendChild(image);
-  } else {
-    icon.textContent = server.name.charAt(0).toUpperCase();
-  }
-  header.appendChild(icon);
-
-  const headerText = createElement('div', 'details-title');
-  headerText.appendChild(createElement('h4', '', server.name));
-  const idRow = createElement('div', 'details-id-row');
-  const idText = createElement('span', 'muted', `ID: ${server.id}`);
-  const copyButton = createElement('button', 'btn btn-secondary', 'Copy ID');
-  copyButton.type = 'button';
-  copyButton.addEventListener('click', async () => {
-    try {
-      await navigator.clipboard.writeText(server.id);
-      showToast('Server ID copied');
-    } catch {
-      showToast('Unable to copy ID', { variant: 'error' });
-    }
-  });
-  idRow.append(idText, copyButton);
-  headerText.appendChild(idRow);
-  header.appendChild(headerText);
-  detailsBody.appendChild(header);
+  detailsBody.appendChild(
+    createDetailsHeader(server.id, server.name, server.icon ?? null, server.name.charAt(0).toUpperCase()),
+  );
 
   const meta = createElement('div', 'details-meta');
   const joinedAt = member?.joined_at ? new Date(member.joined_at).toLocaleDateString() : 'Unknown';
@@ -476,6 +912,15 @@ export const openDetails = async (guildId: string): Promise<void> => {
   const widgetStatus = state.userData.widgetCache[guildId]?.instantInvite ? 'Widget enabled' : 'Widget off';
   meta.appendChild(createElement('div', 'detail-row', `Joined: ${joinedAt}`));
   meta.appendChild(createElement('div', 'detail-row', `Roles: ${rolesCount}`));
+  meta.appendChild(
+    createElement(
+      'div',
+      'detail-row',
+      `Members: ${formatCount(server.approximate_member_count)} · Online: ${formatCount(
+        server.approximate_presence_count ?? state.userData.widgetCache[guildId]?.presenceCount,
+      )}`,
+    ),
+  );
   meta.appendChild(createElement('div', 'detail-row', widgetStatus));
   detailsBody.appendChild(meta);
 
@@ -509,7 +954,7 @@ export const openDetails = async (guildId: string): Promise<void> => {
       rolesList.appendChild(item);
     }
     rolesSection.appendChild(rolesList);
-    const rolesNote = createElement('p', 'roles-note muted', 'Role names require bot permissions \u2014 showing role IDs');
+    const rolesNote = createElement('p', 'roles-note muted', 'Role names require bot permissions — showing role IDs');
     rolesSection.appendChild(rolesNote);
   } else {
     const noRoles = createElement('p', 'muted', 'No roles');
@@ -517,57 +962,18 @@ export const openDetails = async (guildId: string): Promise<void> => {
   }
   detailsBody.appendChild(rolesSection);
 
-  const nicknameField = createElement('div', 'form-field');
-  const nicknameLabel = createElement('label', '', 'Nickname');
-  nicknameLabel.setAttribute('for', 'nickname-input');
-  const nicknameInput = document.createElement('input');
-  nicknameInput.id = 'nickname-input';
-  nicknameInput.type = 'text';
-  nicknameInput.value = state.userData.nicknames[guildId] ?? '';
-  nicknameField.append(nicknameLabel, nicknameInput);
-  detailsBody.appendChild(nicknameField);
+  const annotations = createAnnotationFields(guildId);
+  detailsBody.appendChild(annotations.element);
 
-  const notesField = createElement('div', 'form-field');
-  const notesLabel = createElement('label', '', 'Notes');
-  notesLabel.setAttribute('for', 'notes-input');
-  const notesInput = document.createElement('textarea');
-  notesInput.id = 'notes-input';
-  notesInput.value = state.userData.notes[guildId] ?? '';
-  notesField.append(notesLabel, notesInput);
-  detailsBody.appendChild(notesField);
-
-  // Category assignment dropdown
-  const categoryField = createElement('div', 'form-field');
-  const categoryLabel = createElement('label', '', 'Category');
-  categoryLabel.setAttribute('for', 'category-select');
-  const categorySelect = document.createElement('select');
-  categorySelect.id = 'category-select';
-  categorySelect.className = 'sort-select';
-
-  const noneOption = document.createElement('option');
-  noneOption.value = '';
-  noneOption.textContent = 'None';
-  categorySelect.appendChild(noneOption);
-
-  const sortedCats = [...state.userData.categories].sort((a, b) => a.order - b.order);
-  for (const cat of sortedCats) {
-    const opt = document.createElement('option');
-    opt.value = cat.id;
-    opt.textContent = cat.name;
-    categorySelect.appendChild(opt);
-  }
-  categorySelect.value = state.userData.serverCategories[guildId] ?? '';
-  categoryField.append(categoryLabel, categorySelect);
-  detailsBody.appendChild(categoryField);
+  const saveForLater = createSaveForLaterSection(server, member);
+  detailsBody.appendChild(saveForLater.element);
 
   const actions = createElement('div', 'modal-actions');
   const saveButton = createElement('button', 'btn btn-primary', 'Save');
   saveButton.type = 'button';
   saveButton.addEventListener('click', () => {
-    state.userData = updateNickname(state.userData, guildId, nicknameInput.value, storageOptions);
-    state.userData = updateNotes(state.userData, guildId, notesInput.value, storageOptions);
-    const selectedCategory = categorySelect.value || null;
-    state.userData = assignServerToCategory(state.userData, guildId, selectedCategory, storageOptions);
+    annotations.save();
+    state.userData = updateDepartureReason(state.userData, guildId, saveForLater.reasonInput.value, storageOptions);
     showToast('Details saved');
     render();
     _detailsModal?.close();
