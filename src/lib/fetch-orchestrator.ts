@@ -9,14 +9,8 @@ import {
   updateWidgetCache,
   type WidgetCacheEntry,
 } from './storage';
+import { formatRelativeTime, formatSecondsRemaining } from './utils';
 import {
-  formatCooldownRemaining,
-  formatRelativeTime,
-  formatSecondsRemaining,
-  getCooldownRemaining,
-} from './utils';
-import {
-  FETCH_COOLDOWN_MS,
   getElement,
   isDemoMode,
   state,
@@ -33,7 +27,7 @@ export const delay = (ms: number): Promise<void> => new Promise((resolve) => set
 export const fetchState = {
   shouldStop: false,
   inProgress: false,
-  cooldownTimerId: undefined as number | undefined,
+  lastRunTimerId: undefined as number | undefined,
   rateLimitTimerId: undefined as number | undefined,
   rateLimitUntil: null as number | null,
 };
@@ -51,11 +45,9 @@ export const updateFetchButtonState = (): void => {
   const fetchTooltipAnchor = getElement<HTMLElement>('fetch-tooltip-anchor');
   const fetchTooltip = getElement<HTMLElement>('fetch-tooltip');
 
-  // Check rate limit first (takes priority)
+  // Rate limit backoff takes priority over the in-progress state
   const isRateLimited = fetchState.rateLimitUntil !== null && fetchState.rateLimitUntil > Date.now();
-  const remaining = getCooldownRemaining(state.userData.lastFetchTimestamp, FETCH_COOLDOWN_MS);
-  const isOnCooldown = remaining > 0;
-  const isDisabled = isRateLimited || isOnCooldown || fetchState.inProgress;
+  const isDisabled = isRateLimited || fetchState.inProgress;
 
   fetchButton.disabled = isDisabled;
   fetchButton.setAttribute('aria-disabled', isDisabled ? 'true' : 'false');
@@ -64,13 +56,6 @@ export const updateFetchButtonState = (): void => {
     const secondsRemaining = Math.ceil((fetchState.rateLimitUntil! - Date.now()) / 1000);
     const formatted = formatSecondsRemaining(secondsRemaining);
     fetchTooltip.textContent = `Rate limited by Discord. Available in ${formatted}.`;
-    fetchTooltip.classList.add('is-cooldown');
-    fetchTooltipAnchor.classList.add('is-tooltip-active');
-    fetchTooltipAnchor.setAttribute('tabindex', '0');
-    fetchTooltip.setAttribute('aria-hidden', 'false');
-  } else if (isOnCooldown) {
-    const formatted = formatCooldownRemaining(remaining);
-    fetchTooltip.textContent = `Cooldown active. Available in ${formatted}.`;
     fetchTooltip.classList.add('is-cooldown');
     fetchTooltipAnchor.classList.add('is-tooltip-active');
     fetchTooltipAnchor.setAttribute('tabindex', '0');
@@ -106,25 +91,18 @@ export const updateFetchLastRunDisplay = (): void => {
   }
 };
 
-export const stopCooldownTimer = (): void => {
-  if (fetchState.cooldownTimerId !== undefined) {
-    window.clearInterval(fetchState.cooldownTimerId);
-    fetchState.cooldownTimerId = undefined;
+export const stopLastRunTimer = (): void => {
+  if (fetchState.lastRunTimerId !== undefined) {
+    window.clearInterval(fetchState.lastRunTimerId);
+    fetchState.lastRunTimerId = undefined;
   }
 };
 
-export const startCooldownTimer = (): void => {
-  stopCooldownTimer();
-  const tick = (): void => {
-    updateFetchButtonState();
-    updateFetchLastRunDisplay();
-    const remaining = getCooldownRemaining(state.userData.lastFetchTimestamp, FETCH_COOLDOWN_MS);
-    if (remaining <= 0) {
-      stopCooldownTimer();
-    }
-  };
-  tick();
-  fetchState.cooldownTimerId = window.setInterval(tick, 60000); // Update every minute
+/** Keep the relative "Last fetched" label current while the app is open. */
+export const startLastRunTimer = (): void => {
+  stopLastRunTimer();
+  updateFetchLastRunDisplay();
+  fetchState.lastRunTimerId = window.setInterval(updateFetchLastRunDisplay, 60000); // Update every minute
 };
 
 export const stopRateLimitTimer = (): void => {
@@ -298,7 +276,6 @@ export const performWidgetFetch = async (): Promise<void> => {
   // Update timestamp if any successful responses
   if (anySuccess) {
     state.userData = updateLastFetchTimestamp(state.userData, new Date().toISOString(), storageOptions);
-    startCooldownTimer();
   }
 
   updateFetchButtonState();

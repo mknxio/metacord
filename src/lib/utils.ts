@@ -58,25 +58,6 @@ export const formatRelativeTime = (isoTimestamp: string): string => {
   return `${weeks}w ago`;
 };
 
-export const getCooldownRemaining = (lastFetchTimestamp: string | null, cooldownMs: number): number => {
-  if (!lastFetchTimestamp) return 0;
-  const now = Date.now();
-  const then = new Date(lastFetchTimestamp).getTime();
-  const elapsed = now - then;
-  const remaining = cooldownMs - elapsed;
-  return remaining > 0 ? remaining : 0;
-};
-
-export const formatCooldownRemaining = (remainingMs: number): string => {
-  if (remainingMs <= 0) return '';
-  const minutes = Math.ceil(remainingMs / 60000);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  const remainingMinutes = minutes % 60;
-  if (remainingMinutes === 0) return `${hours}h`;
-  return `${hours}h ${remainingMinutes}m`;
-};
-
 export const formatSecondsRemaining = (seconds: number): string => {
   if (seconds <= 0) return '0s';
   if (seconds < 60) return `${Math.ceil(seconds)}s`;

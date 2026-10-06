@@ -5,8 +5,6 @@ import {
   getBannerUrl,
   createElement,
   formatRelativeTime,
-  getCooldownRemaining,
-  formatCooldownRemaining,
   formatSecondsRemaining,
 } from '../utils';
 
@@ -192,64 +190,6 @@ describe('formatRelativeTime', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2025-01-01T00:01:00Z'));
     expect(formatRelativeTime('2025-01-01T00:00:00Z')).toBe('1m ago');
-  });
-});
-
-describe('getCooldownRemaining', () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it('returns 0 for null timestamp', () => {
-    expect(getCooldownRemaining(null, 60000)).toBe(0);
-  });
-
-  it('returns remaining ms when cooldown has not expired', () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2025-01-01T00:00:30Z'));
-    // 30 seconds elapsed, 60 second cooldown → 30000ms remaining
-    const remaining = getCooldownRemaining('2025-01-01T00:00:00Z', 60000);
-    expect(remaining).toBe(30000);
-  });
-
-  it('returns 0 when cooldown has expired', () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2025-01-01T00:02:00Z'));
-    // 120 seconds elapsed, 60 second cooldown → expired
-    expect(getCooldownRemaining('2025-01-01T00:00:00Z', 60000)).toBe(0);
-  });
-
-  it('returns 0 when cooldown exactly expired', () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2025-01-01T00:01:00Z'));
-    expect(getCooldownRemaining('2025-01-01T00:00:00Z', 60000)).toBe(0);
-  });
-});
-
-describe('formatCooldownRemaining', () => {
-  it('returns empty string for 0 ms', () => {
-    expect(formatCooldownRemaining(0)).toBe('');
-  });
-
-  it('returns empty string for negative ms', () => {
-    expect(formatCooldownRemaining(-1000)).toBe('');
-  });
-
-  it('returns minutes for less than an hour', () => {
-    expect(formatCooldownRemaining(30000)).toBe('1m'); // 30s → ceil to 1m
-    expect(formatCooldownRemaining(60000)).toBe('1m');
-    expect(formatCooldownRemaining(120000)).toBe('2m');
-    expect(formatCooldownRemaining(3540000)).toBe('59m'); // 59 minutes
-  });
-
-  it('returns hours only when remaining minutes is exactly 0', () => {
-    expect(formatCooldownRemaining(3600000)).toBe('1h'); // exactly 1 hour
-  });
-
-  it('returns hours and minutes for larger values', () => {
-    expect(formatCooldownRemaining(3660000)).toBe('1h 1m'); // 61 minutes
-    expect(formatCooldownRemaining(5400000)).toBe('1h 30m'); // 90 minutes
-    expect(formatCooldownRemaining(7200000)).toBe('2h'); // exactly 2 hours
   });
 });
 
