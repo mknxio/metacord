@@ -23,6 +23,8 @@ export const filterTooltipCopy: Partial<Record<FilterKey, string>> = {
 export interface AppState {
   me: string | null;
   guilds: import('./api').ApiGuild[];
+  /** True once `guilds` holds a successfully loaded list (live or demo) this session. */
+  guildListLoaded: boolean;
   userData: UserDataStore;
   activeFilters: Set<FilterKey>;
   search: string;
@@ -112,6 +114,7 @@ export const storageOptions = isDemoMode ? { storageKey: DEMO_STORAGE_KEY } : un
 export const state: AppState = {
   me: null,
   guilds: [],
+  guildListLoaded: false,
   userData: loadUserData(storageOptions),
   activeFilters: new Set<FilterKey>(),
   search: '',

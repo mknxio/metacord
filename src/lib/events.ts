@@ -10,6 +10,7 @@ import {
   moveCategory,
 } from './storage';
 import { createElement } from './utils';
+import { reconcileImportedUserData } from './guild-sync';
 import type { ModalController } from '../components/modal';
 import {
   BUILTIN_SECTIONS,
@@ -138,7 +139,12 @@ const handleImport = async (file: File): Promise<boolean> => {
   try {
     const content = await file.text();
     const parsed: unknown = JSON.parse(content);
-    state.userData = importUserData(parsed, storageOptions);
+    state.userData = reconcileImportedUserData(
+      importUserData(parsed, storageOptions),
+      state.guildListLoaded ? state.guilds : null,
+      new Date().toISOString(),
+      storageOptions,
+    );
     if (isDemoMode && loginScreen.getAttribute('aria-hidden') === 'false') {
       setDemoUserDataLoaded(true);
       const message = 'User data loaded. Load guilds_api.json to continue.';

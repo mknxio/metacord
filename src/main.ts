@@ -126,6 +126,7 @@ const hydrateApp = async (): Promise<void> => {
     return;
   }
   state.guilds = outcome.guilds;
+  state.guildListLoaded = true;
   state.userData = outcome.userData;
   render();
 };

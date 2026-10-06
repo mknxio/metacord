@@ -191,6 +191,7 @@ export const applyDemoData = (guilds: ApiGuild[], options?: { resetUserData?: bo
   }
   saveUserData(next, storageOptions);
   state.userData = next;
+  state.guildListLoaded = true;
   setScreen('app');
   render();
 };

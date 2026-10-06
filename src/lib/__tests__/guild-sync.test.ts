@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { AuthError, RateLimitError, type ApiGuild } from '../api';
-import { syncGuildList } from '../guild-sync';
+import { reconcileImportedUserData, syncGuildList } from '../guild-sync';
 import {
   createDefaultUserData,
+  importUserData,
   loadUserData,
   reconcileServerSnapshots,
   saveUserData,
@@ -112,5 +113,36 @@ describe('syncGuildList', () => {
     expect(outcome.ok).toBe(true);
     expect(outcome.userData.notes['1']).toBe('edited during load');
     expect(loadUserData(storageOptions).notes['1']).toBe('edited during load');
+  });
+});
+
+describe('reconcileImportedUserData', () => {
+  const v2Export = {
+    version: 2,
+    favorites: ['1'],
+    nicknames: {},
+    notes: { '1': 'still here', gone: 'left before history existed' },
+    widgetCache: {},
+    lastFetchTimestamp: null,
+    categories: [],
+    serverCategories: {},
+  };
+
+  it('recovers imported orphan annotations and snapshots current servers when a list is loaded', () => {
+    const imported = importUserData(v2Export, storageOptions);
+    const next = reconcileImportedUserData(imported, [guild('1')], T2, storageOptions);
+    expect(next.servers['1']).toMatchObject({ name: 'Server 1', departedAt: null, lastSeenAt: T2 });
+    expect(next.servers.gone).toMatchObject({ name: null, departedAt: T2 });
+    expect(next.notes).toEqual(v2Export.notes);
+    expect(loadUserData(storageOptions).servers.gone?.departedAt).toBe(T2);
+  });
+
+  it('leaves imported data untouched when no guild list has loaded yet', () => {
+    const imported = importUserData(v2Export, storageOptions);
+    const stored = localStorage.getItem(TEST_KEY);
+    const next = reconcileImportedUserData(imported, null, T2, storageOptions);
+    expect(next).toBe(imported);
+    expect(next.servers).toEqual({});
+    expect(localStorage.getItem(TEST_KEY)).toBe(stored);
   });
 });

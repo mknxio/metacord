@@ -49,3 +49,22 @@ export const syncGuildList = async (
   saveUserData(next, options.storageOptions);
   return { ok: true, guilds, userData: next };
 };
+
+/**
+ * Reconciles freshly imported user data against the guild list already loaded this
+ * session, so imported history (orphan annotations, snapshots for servers left on another
+ * device) shows up without a reload. `loadedGuilds` is null when no list has loaded
+ * successfully yet; reconciling then would mark every server departed, so the imported
+ * data is returned unchanged and the next successful load reconciles it.
+ */
+export const reconcileImportedUserData = (
+  imported: UserDataStore,
+  loadedGuilds: ApiGuild[] | null,
+  nowIso: string,
+  storageOptions?: { storageKey?: string },
+): UserDataStore => {
+  if (loadedGuilds === null) return imported;
+  const next = reconcileServerSnapshots(imported, loadedGuilds, nowIso);
+  saveUserData(next, storageOptions);
+  return next;
+};
