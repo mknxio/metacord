@@ -23,6 +23,7 @@ import {
   matchesSearch,
   UNKNOWN_SERVER_NAME,
 } from '../render';
+import { addDemoServerExamples, DEMO_DEPARTED_EXAMPLE_ID } from '../demo';
 import { createDefaultUserData, reconcileServerSnapshots } from '../storage';
 import type { ApiGuild } from '../api';
 
@@ -145,5 +146,17 @@ describe('buildDepartedViews', () => {
   it('is excluded from bulk selection', () => {
     setup();
     expect(getVisibleServerIds()).toEqual(['live']);
+  });
+});
+
+describe('addDemoServerExamples', () => {
+  it('adds one departed and one saved example without touching other data', () => {
+    const guilds = [guild('d1'), guild('d2')];
+    const base = reconcileServerSnapshots(createDefaultUserData(), guilds, T1);
+    const data = addDemoServerExamples(guilds, base, new Date(T2));
+    expect(data.servers[DEMO_DEPARTED_EXAMPLE_ID].departedAt).not.toBeNull();
+    expect(data.servers.d1.savedAt).toBe(T2);
+    expect(data.servers.d2.savedAt).toBeNull();
+    expect(data.notes[DEMO_DEPARTED_EXAMPLE_ID]).toBeTruthy();
   });
 });

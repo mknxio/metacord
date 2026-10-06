@@ -46,6 +46,8 @@ export interface DemoGuildEntry {
   banner: string | null;
   owner: boolean;
   features: string[];
+  approximate_member_count: number | null;
+  approximate_presence_count: number | null;
 }
 
 export const getElement = <T extends HTMLElement>(selector: string): T => {
