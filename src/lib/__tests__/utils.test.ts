@@ -8,6 +8,7 @@ import {
   getCooldownRemaining,
   formatCooldownRemaining,
   formatSecondsRemaining,
+  normalizeInviteUrl,
 } from '../utils';
 
 describe('formatNumber', () => {
@@ -278,5 +279,36 @@ describe('formatSecondsRemaining', () => {
     expect(formatSecondsRemaining(61)).toBe('1m 1s');
     expect(formatSecondsRemaining(90)).toBe('1m 30s');
     expect(formatSecondsRemaining(125)).toBe('2m 5s');
+  });
+});
+
+describe('normalizeInviteUrl', () => {
+  it.each([
+    ['https://discord.gg/abc123', 'https://discord.gg/abc123'],
+    ['https://discord.com/invite/abc123', 'https://discord.com/invite/abc123'],
+    ['https://discordapp.com/invite/abc123', 'https://discordapp.com/invite/abc123'],
+    ['  https://discord.gg/my-vanity/  ', 'https://discord.gg/my-vanity'],
+    ['discord.gg/abc123', 'https://discord.gg/abc123'],
+    ['https://DISCORD.GG/AbC123?event=1#x', 'https://discord.gg/AbC123'],
+  ])('accepts %s', (input, expected) => {
+    expect(normalizeInviteUrl(input)).toBe(expected);
+  });
+
+  it.each([
+    '',
+    'javascript:alert(1)',
+    'http://discord.gg/abc123',
+    'https://discord.gg/',
+    'https://discord.gg/abc/extra',
+    'https://discord.com/abc123',
+    'https://discord.com/channels/1/2',
+    'https://evil.com/discord.gg/abc123',
+    'https://discord.gg.evil.com/abc123',
+    'https://user:pass@discord.gg/abc123',
+    'https://discord.gg:8443/abc123',
+    'https://discord.gg/abc 123',
+    'data:text/html,<script>alert(1)</script>',
+  ])('rejects %s', (input) => {
+    expect(normalizeInviteUrl(input)).toBeNull();
   });
 });
