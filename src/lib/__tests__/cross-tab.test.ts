@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { ApiGuild } from '../api';
+import { renderUnsupportedDataNotice } from '../data-notice';
 import { syncGuildList } from '../guild-sync';
 import {
   createDefaultUserData,
@@ -113,6 +114,54 @@ describe('guild sync racing another tab', () => {
   });
 });
 
+describe('guild sync racing another tab\'s newer-version save', () => {
+  const newer = JSON.stringify({ version: 99, notes: { '1': 'written by a newer version' } });
+
+  const syncWhileOtherTabSavesNewer = async (key: string) => {
+    const thisTab = bootTab(key);
+    let resolveFetch: (guilds: ApiGuild[]) => void = () => {};
+    const pending = syncGuildList(
+      () => new Promise<ApiGuild[]>((resolve) => (resolveFetch = resolve)),
+      () => thisTab,
+      { now: () => T2, storageOptions: { storageKey: key } },
+    );
+    localStorage.setItem(key, newer);
+    resolveFetch([guild('1')]);
+    return pending;
+  };
+
+  it('backs the newer payload up before saving reconciled history', async () => {
+    const key = '__test_cross_tab_race_newer__';
+    const outcome = await syncWhileOtherTabSavesNewer(key);
+
+    expect(outcome).toMatchObject({ ok: true, persisted: true });
+    expect(listUnsupportedBackups({ storageKey: key }).map((backup) => backup.payload)).toEqual([newer]);
+    const container = document.createElement('div');
+    renderUnsupportedDataNotice(container, { storageKey: key });
+    expect(container.textContent).toContain('schema v99');
+  });
+
+  it('pauses saving and keeps the payload in place when no backup fits', async () => {
+    const key = '__test_cross_tab_race_newer_full__';
+    const setItem = localStorage.setItem.bind(localStorage);
+    vi.spyOn(localStorage, 'setItem').mockImplementation((itemKey: string, value: string) => {
+      if (itemKey.includes('_unsupported_backup')) {
+        throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
+      }
+      setItem(itemKey, value);
+    });
+    const outcome = await syncWhileOtherTabSavesNewer(key);
+
+    expect(outcome).toMatchObject({ ok: true, persisted: false });
+    expect(outcome.userData.servers['2'].departedAt).toBe(T2);
+    expect(localStorage.getItem(key)).toBe(newer);
+    expect(isUserDataWriteBlocked({ storageKey: key })).toBe(true);
+    const container = document.createElement('div');
+    renderUnsupportedDataNotice(container, { storageKey: key });
+    expect(container.textContent).toContain('Saving is paused');
+  });
+});
+
 describe('watchPersistedUserData', () => {
   it('adopts another tab\'s save to the active key', () => {
     const key = '__test_cross_tab_watch__';
@@ -147,7 +196,7 @@ describe('watchPersistedUserData', () => {
     stop();
   });
 
-  it('never starts the newer-version backup flow for another tab\'s newer data', () => {
+  it('preserves another tab\'s newer-version data and reports it once', () => {
     const key = '__test_cross_tab_newer__';
     const current = bootTab(key);
     const onChange = vi.fn();
@@ -156,9 +205,11 @@ describe('watchPersistedUserData', () => {
     const newer = JSON.stringify({ version: 99, notes: { '1': 'future' } });
     localStorage.setItem(key, newer);
     dispatchStorageEvent(key);
-    expect(onChange).not.toHaveBeenCalled();
-    expect(listUnsupportedBackups({ storageKey: key })).toEqual([]);
-    expect(isUserDataWriteBlocked({ storageKey: key })).toBe(false);
+    dispatchStorageEvent(key);
+    // Reported so the notice is refreshed; this tab keeps its own data.
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith(current);
+    expect(listUnsupportedBackups({ storageKey: key }).map((backup) => backup.payload)).toEqual([newer]);
     expect(localStorage.getItem(key)).toBe(newer);
     stop();
   });

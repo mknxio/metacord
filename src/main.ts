@@ -121,6 +121,22 @@ function closeAppOverlays(): void {
   toastRegion.replaceChildren();
 }
 
+// --- Newer-version data notice ---
+
+function renderDataNotice(): void {
+  renderUnsupportedDataNotice(getElement('data-notice'), storageOptions, {
+    // Persist what changed while saving was paused for unpreserved newer-version data.
+    onWritesResumed: () => {
+      try {
+        saveUserData(state.userData, storageOptions);
+      } catch (error) {
+        console.error('Failed to save user data', error);
+        showToast('Unable to save your data in this browser', { variant: 'error' });
+      }
+    },
+  });
+}
+
 // --- App hydration ---
 
 const hydrateApp = async (): Promise<void> => {
@@ -153,6 +169,8 @@ const hydrateApp = async (): Promise<void> => {
   state.guildListLoaded = true;
   state.userData = outcome.userData;
   render();
+  // Syncing may have preserved newer-version data another tab saved meanwhile.
+  renderDataNotice();
   if (!outcome.persisted) {
     showToast('Server history could not be saved in this browser', { variant: 'error' });
   }
@@ -165,23 +183,14 @@ try {
   setFooterBuildInfo();
   setupEvents({ importModal, fetchModal, instructionsModal, demoModal, categoriesModal });
   setupDemoMode();
-  renderUnsupportedDataNotice(getElement('data-notice'), storageOptions, {
-    // Persist what changed while saving was paused for unpreserved newer-version data.
-    onWritesResumed: () => {
-      try {
-        saveUserData(state.userData, storageOptions);
-      } catch (error) {
-        console.error('Failed to save user data', error);
-        showToast('Unable to save your data in this browser', { variant: 'error' });
-      }
-    },
-  });
+  renderDataNotice();
   // Adopt saves from other tabs so later whole-store saves here do not overwrite them.
   watchPersistedUserData(
     () => state.userData,
     (data) => {
       state.userData = data;
       render();
+      renderDataNotice();
     },
     storageOptions,
   );

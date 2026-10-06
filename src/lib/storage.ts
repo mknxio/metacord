@@ -324,6 +324,22 @@ export const discardUnsupportedBackups = (options?: StorageOptions): void => {
   }
 };
 
+/**
+ * Data written by a newer app version: keep an untouched copy so falling back to defaults
+ * (and the next save) cannot destroy it. If no copy fits, block writes to the main key
+ * instead, so it stays the copy until the user downloads or discards it.
+ */
+const preserveNewerPayload = (key: string, stored: string, options?: StorageOptions): void => {
+  try {
+    backupUnsupportedPayload(stored, options);
+  } catch (backupError) {
+    if (releasedPayloads.get(key) !== stored) {
+      unpreservedPayloads.set(key, stored);
+    }
+    console.error('Failed to preserve newer-version user data; saving is paused', backupError);
+  }
+};
+
 export const loadUserData = (options?: StorageOptions): UserDataStore => {
   const key = resolveStorageKey(options);
   try {
@@ -335,17 +351,7 @@ export const loadUserData = (options?: StorageOptions): UserDataStore => {
         ? parsed.version
         : null;
     if (stored && newerVersion !== null) {
-      // Data written by a newer app version: keep an untouched copy so falling back to
-      // defaults (and the next save) cannot destroy it. If no copy fits, block writes to
-      // the main key instead, so it stays the copy until the user downloads or discards it.
-      try {
-        backupUnsupportedPayload(stored, options);
-      } catch (backupError) {
-        if (releasedPayloads.get(key) !== stored) {
-          unpreservedPayloads.set(key, stored);
-        }
-        console.error('Failed to preserve newer-version user data; saving is paused', backupError);
-      }
+      preserveNewerPayload(key, stored, options);
       throw new UnsupportedUserDataVersionError(newerVersion);
     }
     // The main key no longer holds a newer payload: nothing left to protect.
@@ -376,33 +382,46 @@ export const saveUserData = (data: UserDataStore, options?: StorageOptions): boo
 };
 
 /**
- * Returns the user data another tab saved under this storage key since this tab last read or
- * wrote it, so whole-store saves here do not overwrite it. Returns `current` unchanged when
- * storage did not change (`current` may then hold edits whose save failed), while saving is
- * paused, and when storage holds nothing this version loads (empty, invalid or newer-version
- * data; loadUserData deals with those on the next load). Never writes.
+ * Reads what another tab saved under this storage key since this tab last read or wrote it.
+ * `data` is that store, or `current` unchanged when storage did not change (`current` may
+ * then hold edits whose save failed), while saving is paused, and when storage holds nothing
+ * this version loads. Newer-version data from another tab goes through the same preservation
+ * as on load (backup, or paused saving) and sets `preservedNewer` so callers can show the
+ * notice. The only write is that backup copy.
  */
-export const readPersistedUserData = (current: UserDataStore, options?: StorageOptions): UserDataStore => {
+const readPersisted = (
+  current: UserDataStore,
+  options?: StorageOptions,
+): { data: UserDataStore; preservedNewer: boolean } => {
+  const unchanged = { data: current, preservedNewer: false };
   const key = resolveStorageKey(options);
-  if (unpreservedPayloads.has(key)) return current;
+  if (unpreservedPayloads.has(key)) return unchanged;
   try {
     const stored = localStorage.getItem(key);
-    if (stored === null || stored === lastSyncedPayloads.get(key)) return current;
+    if (stored === null || stored === lastSyncedPayloads.get(key)) return unchanged;
     const parsed: unknown = JSON.parse(stored);
-    if (!isRecord(parsed)) return current;
-    if (typeof parsed.version === 'number' && parsed.version > CURRENT_USER_DATA_VERSION) return current;
-    const data = migrateUserData(sanitizeUserData(parsed));
+    if (!isRecord(parsed)) return unchanged;
     lastSyncedPayloads.set(key, stored);
-    return data;
+    if (typeof parsed.version === 'number' && parsed.version > CURRENT_USER_DATA_VERSION) {
+      preserveNewerPayload(key, stored, options);
+      return { data: current, preservedNewer: true };
+    }
+    return { data: migrateUserData(sanitizeUserData(parsed)), preservedNewer: false };
   } catch {
-    return current;
+    return unchanged;
   }
 };
 
+/** The user data another tab saved since this tab last read or wrote it (see readPersisted). */
+export const readPersistedUserData = (current: UserDataStore, options?: StorageOptions): UserDataStore =>
+  readPersisted(current, options).data;
+
 /**
  * Keeps a long-lived tab in step with saves from other tabs (`storage` events only fire in
- * the other tabs). Only the given storage key is watched, and the handler only reads, so it
- * cannot echo a save back. Returns a function that stops watching.
+ * the other tabs). Only the given storage key is watched, and the handler never writes that
+ * key, so it cannot echo a save back. `onChange` also runs when another tab's newer-version
+ * data was preserved, so the caller can refresh the data notice. Returns a function that
+ * stops watching.
  */
 export const watchPersistedUserData = (
   getCurrent: () => UserDataStore,
@@ -413,8 +432,8 @@ export const watchPersistedUserData = (
   const listener = (event: StorageEvent): void => {
     if (event.key !== key) return;
     const current = getCurrent();
-    const next = readPersistedUserData(current, options);
-    if (next !== current) onChange(next);
+    const { data, preservedNewer } = readPersisted(current, options);
+    if (data !== current || preservedNewer) onChange(data);
   };
   window.addEventListener('storage', listener);
   return () => window.removeEventListener('storage', listener);
