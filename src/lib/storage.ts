@@ -189,12 +189,6 @@ export const updateWidgetCache = (
   return next;
 };
 
-export const clearWidgetCache = (data: UserDataStore, options?: StorageOptions): UserDataStore => {
-  const next = { ...data, widgetCache: {} };
-  saveUserData(next, options);
-  return next;
-};
-
 export const updateLastFetchTimestamp = (
   data: UserDataStore,
   timestamp: string | null,

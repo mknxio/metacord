@@ -192,6 +192,39 @@ describe('performWidgetFetch', () => {
     expect(state.userData.lastFetchTimestamp).toBeNull();
   });
 
+  it('keeps cached widget data when a forced refetch fails', async () => {
+    const [cachedId, otherId] = guildIds(2);
+    const cached = { instantInvite: 'https://discord.com/invite/keep', presenceCount: 12, lastCached: '2026-10-01T00:00:00.000Z' };
+    state.guilds = asGuilds([cachedId, otherId]);
+    state.userData = { ...state.userData, widgetCache: { [cachedId]: cached } };
+    (document.getElementById('fetch-force') as HTMLInputElement).checked = true;
+    fetchMock.mockRejectedValue(new TypeError('Failed to fetch'));
+
+    await performWidgetFetch();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(state.userData.widgetCache).toEqual({ [cachedId]: cached });
+  });
+
+  it('replaces cached widget data on a successful forced refetch', async () => {
+    const [cachedId] = guildIds(1);
+    state.guilds = asGuilds([cachedId]);
+    state.userData = {
+      ...state.userData,
+      widgetCache: { [cachedId]: { instantInvite: null, presenceCount: 1, lastCached: '2026-10-01T00:00:00.000Z' } },
+    };
+    (document.getElementById('fetch-force') as HTMLInputElement).checked = true;
+    fetchMock.mockResolvedValue(widgetResponse(200, { instant_invite: 'https://discord.com/invite/new', presence_count: 9 }));
+
+    await performWidgetFetch();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(state.userData.widgetCache[cachedId]).toMatchObject({
+      instantInvite: 'https://discord.com/invite/new',
+      presenceCount: 9,
+    });
+  });
+
   it('counts isolated network failures as errors and finishes the batch', async () => {
     state.guilds = asGuilds(guildIds(3));
     fetchMock

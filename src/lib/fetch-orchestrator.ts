@@ -4,7 +4,6 @@ import {
   fetchWidget,
 } from './api';
 import {
-  clearWidgetCache,
   updateLastFetchTimestamp,
   updateWidgetCache,
   type WidgetCacheEntry,
@@ -140,7 +139,7 @@ export const updateFetchSkipInfo = (): void => {
   const fetchForce = getElement<HTMLInputElement>('fetch-force');
 
   if (fetchForce.checked) {
-    fetchSkipInfo.textContent = 'All cached results will be cleared before fetching.';
+    fetchSkipInfo.textContent = 'All servers will be refetched. Cached results are replaced as new data arrives.';
     return;
   }
   const cachedCount = Object.keys(state.userData.widgetCache).length;
@@ -175,11 +174,9 @@ export const performWidgetFetch = async (): Promise<void> => {
   fetchInlineText.textContent = 'Fetching...';
   fetchInlineDetail.textContent = '';
 
+  // A forced run refetches every server but replaces cache entries only on success,
+  // so a run that fails or is rate limited keeps the previously cached data.
   const force = fetchForce.checked;
-  if (force) {
-    state.userData = clearWidgetCache(state.userData, storageOptions);
-  }
-
   const serverIds = state.guilds.map((guild) => guild.id);
   const targets = force
     ? serverIds
