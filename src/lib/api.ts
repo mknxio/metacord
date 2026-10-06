@@ -109,7 +109,8 @@ const parseRetryAfter = async (response: Response): Promise<number | null> => {
   } catch {
     // Fall back to the header when the body is missing or not JSON.
   }
-  // Retry-After may not be CORS-exposed, so it is only a fallback.
+  // Discord does not CORS-expose Retry-After, so browsers read null here today; the body's
+  // retry_after is the operative source, and the orchestrator applies a default backoff.
   const header = response.headers.get('Retry-After');
   const seconds = header ? Number.parseInt(header, 10) : Number.NaN;
   return Number.isFinite(seconds) && seconds >= 0 ? seconds : null;

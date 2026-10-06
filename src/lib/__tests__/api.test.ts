@@ -100,6 +100,9 @@ describe('fetchWidget', () => {
     expect((error as RateLimitError).retryAfter).toBe(13);
   });
 
+  // Discord does not list Retry-After in Access-Control-Expose-Headers, so in a browser
+  // response.headers.get('Retry-After') returns null for this cross-origin call. The body's
+  // retry_after is the operative source; this fallback only helps if Discord exposes the header.
   it('falls back to the Retry-After header when the 429 body has no retry_after', async () => {
     fetchMock.mockResolvedValue(new Response('', { status: 429, headers: { 'Retry-After': '7' } }));
 
