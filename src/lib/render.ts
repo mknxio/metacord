@@ -797,15 +797,20 @@ const createSaveForLaterSection = (
     }
 
     const wasSaved = Boolean(state.userData.servers[guildId]?.savedAt);
+    // Another tab may have noticed the departure while this tab still lists the server:
+    // only a fresh member response can show the user is still in it.
+    const isDeparted = (): boolean => (state.userData.servers[guildId]?.departedAt ?? null) !== null;
     let membership: MembershipSnapshot | null =
       member && memberReceivedAt ? toMembershipSnapshot(member, memberReceivedAt) : null;
+    let memberConfirmed = false;
     captureButton.disabled = true;
     try {
       if (!invite) {
         invite = await resolveWidgetInvite(guildId, nowIso);
       }
-      if (wasSaved) {
+      if (wasSaved || isDeparted()) {
         membership = await fetchFreshMembership(guildId);
+        memberConfirmed = membership !== null;
       }
     } catch (error) {
       if (error instanceof AuthError) {
@@ -817,13 +822,18 @@ const createSaveForLaterSection = (
       captureButton.disabled = false;
     }
 
-    state.userData = saveServerCapture(
+    const next = saveServerCapture(
       state.userData,
       guild,
-      { membership, invite, departureReason: reason.input.value },
+      { membership, invite, departureReason: reason.input.value, memberConfirmed },
       nowIso,
       storageOptions,
     );
+    if (next === state.userData && isDeparted()) {
+      showToast('This server is no longer in your server list. Nothing was saved.', { variant: 'error' });
+      return;
+    }
+    state.userData = next;
     status.textContent = describeSavedStatus(state.userData.servers[guildId]);
     renderCurrentInvite();
     updateButtonLabel();

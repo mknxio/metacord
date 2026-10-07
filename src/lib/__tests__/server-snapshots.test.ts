@@ -290,6 +290,32 @@ describe('saveServerCapture', () => {
   });
 });
 
+describe('saveServerCapture on a departed snapshot', () => {
+  const departedData = () =>
+    reconcileServerSnapshots(reconcileServerSnapshots(createDefaultUserData(), [guild('1')], T1), [], T2);
+
+  it('refuses without fresh membership evidence and saves nothing', () => {
+    const data = departedData();
+    saveUserData(data, opts);
+    const stored = localStorage.getItem(TEST_KEY);
+    const next = saveServerCapture(data, guild('1'), { membership: null, invite: null, departureReason: '' }, T3, opts);
+    expect(next).toBe(data);
+    expect(localStorage.getItem(TEST_KEY)).toBe(stored);
+  });
+
+  it('revives the server when a member request just succeeded', () => {
+    const membership = { joinedAt: null, nickname: null, roleCount: 0, capturedAt: T3 };
+    const next = saveServerCapture(
+      departedData(),
+      guild('1'),
+      { membership, invite: null, departureReason: '', memberConfirmed: true },
+      T3,
+      opts,
+    );
+    expect(next.servers['1']).toMatchObject({ departedAt: null, lastSeenAt: T3, savedAt: T3, membership });
+  });
+});
+
 describe('updateDepartureReason', () => {
   it('sets and clears the reason on an existing snapshot', () => {
     const data = reconcileServerSnapshots(createDefaultUserData(), [guild('1')], T1);

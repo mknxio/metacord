@@ -23,7 +23,14 @@ vi.mock('../api', async (importOriginal) => {
 
 import { AuthError, RateLimitError, fetchGuildMember, fetchWidget, type ApiGuild, type ApiGuildMember } from '../api';
 import { state } from '../state';
-import { confirmForget, initDetailsModal, initWidgetRateLimit, openDetails, render } from '../render';
+import {
+  confirmForget,
+  initDetailsModal,
+  initShowToast,
+  initWidgetRateLimit,
+  openDetails,
+  render,
+} from '../render';
 import { createDefaultUserData, reconcileServerSnapshots, type UserDataStore } from '../storage';
 
 const T1 = '2026-10-01T10:00:00.000Z';
@@ -294,6 +301,52 @@ describe('membership capture timestamps', () => {
     await clickAndSettle(button);
     expect(state.userData).toBe(before);
     expect(document.getElementById('login-screen')?.classList.contains('hidden')).toBe(false);
+  });
+});
+
+describe('a departure noticed by another tab', () => {
+  const toast = { show: vi.fn(), dismiss: vi.fn() };
+
+  /** This tab still lists the server, but storage (via the watcher) says it departed. */
+  const markDepartedElsewhere = (savedAt: string | null) => {
+    state.userData = {
+      ...state.userData,
+      servers: {
+        ...state.userData.servers,
+        [LIVE_ID]: { ...state.userData.servers[LIVE_ID], savedAt, departedAt: T2, lastSeenAt: T1 },
+      },
+    };
+  };
+
+  beforeEach(() => {
+    const appShell = document.getElementById('app-shell') as HTMLElement;
+    appShell.setAttribute('aria-hidden', 'false');
+    initShowToast(toast as unknown as Parameters<typeof initShowToast>[0], appShell);
+  });
+
+  it('keeps the departure and says so when the membership refresh fails', async () => {
+    const { button } = await openLiveDetails();
+    markDepartedElsewhere(T1);
+    const before = state.userData;
+    mockedFetchGuildMember.mockRejectedValueOnce(new Error('Request failed: 404'));
+    await clickAndSettle(button);
+
+    expect(state.userData).toBe(before);
+    expect(state.userData.servers[LIVE_ID]).toMatchObject({ departedAt: T2, lastSeenAt: T1 });
+    expect(toast.show).toHaveBeenCalledWith(
+      'This server is no longer in your server list. Nothing was saved.',
+      { variant: 'error' },
+    );
+  });
+
+  it('checks membership again for a first save and revives the server when that succeeds', async () => {
+    const { button } = await openLiveDetails();
+    markDepartedElsewhere(null);
+    await clickAndSettle(button);
+
+    expect(mockedFetchGuildMember).toHaveBeenCalledTimes(2);
+    expect(state.userData.servers[LIVE_ID].departedAt).toBeNull();
+    expect(state.userData.servers[LIVE_ID].savedAt).not.toBeNull();
   });
 });
 

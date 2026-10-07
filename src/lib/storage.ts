@@ -836,12 +836,18 @@ export interface ServerCapture {
   membership: MembershipSnapshot | null;
   invite: InviteSnapshot | null;
   departureReason: string | null;
+  /** A member request succeeded during this capture: fresh evidence the user is still in it. */
+  memberConfirmed?: boolean;
 }
 
 /**
  * Saves (or refreshes) a "save for later" capture for a current server. Membership and
  * invite fall back to the previous capture when the new one has none, so a refresh that
  * cannot reach Discord never erases what was captured before.
+ *
+ * A snapshot already marked departed (for example by another tab, while this tab still
+ * lists the server) is only revived with `memberConfirmed`; otherwise `data` is returned
+ * unchanged and nothing is saved, so a stale view cannot undo a departure.
  */
 export const saveServerCapture = (
   data: UserDataStore,
@@ -851,6 +857,7 @@ export const saveServerCapture = (
   options?: StorageOptions,
 ): UserDataStore => {
   const previous = data.servers[guild.id];
+  if (previous && previous.departedAt !== null && !capture.memberConfirmed) return data;
   const base = snapshotFromGuild(guild, previous, nowIso);
   const reason = capture.departureReason?.trim() ?? '';
   const snapshot: ServerSnapshot = {
