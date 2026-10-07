@@ -51,10 +51,10 @@ The builder agreed this direction on 2026-10-07; delivery is tracked in [#15](ht
 Personal data may leave the browser only through an explicit, user-initiated backup. The browser encrypts the backup before upload with a key derived from a passphrase only the user holds, and the server stores and returns an envelope it cannot decrypt. These invariants define the direction:
 
 - **Opt-in per action.** Upload, restore and delete each happen only on explicit user action, after a confirmation and a plain-language disclosure. Login, logout and data changes never upload, restore or sync automatically.
-- **Server-blind storage.** The plaintext is exactly the export representation. That covers the annotations plus derived data such as cached widget details. The browser encrypts it with authenticated encryption under a key from a salted, iterated passphrase KDF, using its built-in cryptography and no added dependency. A minimum passphrase length is enforced. The passphrase and derived key are never sent, logged or persisted. The envelope records and authenticates its KDF and cipher parameters, so a stronger KDF can be adopted later without stranding existing backups. Concrete parameters are specified in #15 and will live beside the implementation.
+- **Server-blind storage.** The plaintext is exactly the export representation. That covers the annotations plus derived data such as cached widget details. The browser encrypts it with authenticated encryption under a key from a salted, iterated passphrase KDF, using its built-in cryptography and no added dependency. A minimum passphrase length is enforced. The passphrase and derived key are never sent, logged or persisted. The envelope records and authenticates its KDF and cipher parameters, so a stronger KDF can be adopted later without stranding existing backups. Concrete parameters are specified in [#15](https://github.com/mknxio/metacord/issues/15) and will live beside the implementation.
 - **Account binding from the server session.** A backup belongs to the account identity in the server-side session. The server never accepts an identity from the request.
 - **Bounded server holding.** Backups use storage separate from sessions. At most two versions are kept per account (latest and previous). They expire 12 months after the last upload, and the user's delete removes both immediately. Request size and upload frequency are capped. Envelope bodies are never logged.
-- **Restore is an import.** Restore decrypts in the browser and replaces local data through the same validation, migration and single-save path as file import. A backup written by a newer schema version is refused without changing local data.
+- **Restore is an import.** Restore decrypts in the browser and replaces local data through the same validation, migration and single-save path as file import. A backup written by a newer schema version is refused without changing local data. File import does not refuse newer versions on `main` yet; that refusal arrives with [#9](https://github.com/mknxio/metacord/issues/9).
 - **Export stays first-class.** Backup adds a recovery path. It never replaces or weakens file export and import, and local data remains the working copy.
 
 Rejected alternatives:
@@ -70,7 +70,7 @@ Accepted limits:
 - The protection covers stored data and a passive operator, not an active one. The same origin serves the encrypting client code, so a compromised deploy could capture passphrases. This is inherent to browser-delivered encryption, but still stronger than server-side encryption, where reading stored data needs no code change.
 - The server learns which account has a backup, plus its size and upload times.
 - Whoever holds a user's session can overwrite or delete that user's backups, but not read them.
-- When this ships, the "No data stored on our servers" promise must be replaced everywhere it appears.
+- When this ships, the "No data stored on our servers" promise and its variants must be replaced everywhere they appear.
 
 ## Architectural principles
 
