@@ -22,7 +22,7 @@ vi.mock('../api', async (importOriginal) => {
 });
 
 import { AuthError, RateLimitError, fetchGuildMember, fetchWidget, type ApiGuild, type ApiGuildMember } from '../api';
-import { state } from '../state';
+import { state, storageOptions } from '../state';
 import {
   confirmForget,
   initDetailsModal,
@@ -31,7 +31,7 @@ import {
   openDetails,
   render,
 } from '../render';
-import { createDefaultUserData, reconcileServerSnapshots, type UserDataStore } from '../storage';
+import { accountStorageKey, createDefaultUserData, reconcileServerSnapshots, type UserDataStore } from '../storage';
 
 const T1 = '2026-10-01T10:00:00.000Z';
 const T2 = '2026-10-02T10:00:00.000Z';
@@ -114,6 +114,8 @@ beforeAll(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Signed in: saves go to this account's key.
+  storageOptions.storageKey = accountStorageKey('1000');
   rateLimit.isActive.mockReturnValue(false);
   mockedFetchGuildMember.mockResolvedValue(member);
   state.guilds = [liveGuild];

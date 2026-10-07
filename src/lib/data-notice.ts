@@ -37,6 +37,12 @@ export const renderUnsupportedDataNotice = (
   options?: StorageOptions,
   hooks?: { onWritesResumed?: () => void },
 ): void => {
+  // Signed out: there is no account data to describe.
+  if (!options?.storageKey) {
+    container.replaceChildren();
+    container.classList.add('hidden');
+    return;
+  }
   const backups = listUnsupportedBackups(options);
   const held = listUnpreservedPayloads(options);
   const entries = [...backups, ...held];

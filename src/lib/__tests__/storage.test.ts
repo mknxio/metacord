@@ -227,21 +227,12 @@ describe('loadUserData', () => {
     expect(data.widgetCache.g3).toBeUndefined();
   });
 
-  it('uses default storage key when no options provided', () => {
-    const defaultKey = 'discord_manager_user_data';
-    const stored: V2UserData = {
-      version: 2,
-      favorites: ['guild1'],
-      nicknames: {},
-      notes: {},
-      widgetCache: {},
-      lastFetchTimestamp: null,
-      categories: [],
-      serverCategories: {},
-    };
-    localStorage.setItem(defaultKey, JSON.stringify(stored));
-    const data = loadUserData();
-    expect(data.favorites).toEqual(['guild1']);
+  it('has no default key: never reads the legacy unscoped key and refuses to save', () => {
+    const legacyKey = 'discord_manager_user_data';
+    localStorage.setItem(legacyKey, JSON.stringify({ ...createDefaultUserData(), favorites: ['guild1'] }));
+    expect(() => loadUserData()).toThrow('sign in first');
+    expect(() => saveUserData(createDefaultUserData())).toThrow('sign in first');
+    expect(JSON.parse(localStorage.getItem(legacyKey) as string).favorites).toEqual(['guild1']);
   });
 });
 

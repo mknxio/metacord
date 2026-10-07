@@ -10,6 +10,8 @@ import {
 } from './storage';
 import { createElement } from './utils';
 import { importReconciledUserData } from './guild-sync';
+import { deactivateAccount } from './account';
+import { renderUnsupportedDataNotice } from './data-notice';
 import type { ModalController } from '../components/modal';
 import {
   BUILTIN_SECTIONS,
@@ -439,6 +441,10 @@ export const setupEvents = (options: SetupEventsOptions): void => {
     } catch (error) {
       console.error(error);
     } finally {
+      // Drop this account's data from memory; it stays at rest under its own key.
+      deactivateAccount();
+      renderUnsupportedDataNotice(getElement('data-notice'), storageOptions);
+      render();
       setScreen('login');
     }
   });

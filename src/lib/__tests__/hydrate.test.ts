@@ -18,6 +18,7 @@ vi.hoisted(() => {
 
 import { AuthError, type ApiGuild } from '../api';
 import { syncGuildList } from '../guild-sync';
+import { activateAccount } from '../account';
 import { applyGuildSyncOutcome } from '../hydrate';
 import { setScreen } from '../render';
 import { state, storageOptions } from '../state';
@@ -51,6 +52,7 @@ beforeAll(() => {
 /** Stored history from earlier sessions: "Still Here" is current, "Long Gone" departed. */
 beforeEach(() => {
   localStorage.clear();
+  activateAccount('1000', () => {});
   const observed = reconcileServerSnapshots(
     createDefaultUserData(),
     [guild('1', 'Still Here'), guild('2', 'Long Gone')],

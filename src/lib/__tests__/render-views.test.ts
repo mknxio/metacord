@@ -144,7 +144,7 @@ describe('buildDepartedViews', () => {
       ...state.userData,
       widgetCache: { gone: { instantInvite: 'https://discord.gg/cached', presenceCount: null, lastCached: T1 } },
     };
-    state.userData = clearWidgetCache(state.userData);
+    state.userData = clearWidgetCache(state.userData, { storageKey: '__test_render_views__' });
     expect(buildDepartedViews().find((view) => view.id === 'gone')?.departure?.inviteUrl).toBe(
       'https://discord.gg/cached',
     );

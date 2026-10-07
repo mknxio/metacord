@@ -78,7 +78,19 @@ interface StorageOptions {
   storageKey?: string;
 }
 
-const STORAGE_KEY = 'discord_manager_user_data';
+/** Prefix of every per-account key; also the old unscoped key that is now discarded. */
+const LEGACY_STORAGE_KEY = 'discord_manager_user_data';
+
+/**
+ * Personal data is isolated per Discord account (#9): each signed-in user ID gets its own
+ * key, and derived keys (newer-version backups) hang off it.
+ */
+export const accountStorageKey = (userId: string): string => {
+  if (!/^\d{1,20}$/.test(userId)) {
+    throw new Error('Invalid Discord user ID');
+  }
+  return `${LEGACY_STORAGE_KEY}:${userId}`;
+};
 
 export const createDefaultUserData = (): UserDataStore => ({
   version: CURRENT_USER_DATA_VERSION,
@@ -193,7 +205,16 @@ const sanitizeUserData = (raw: Record<string, unknown>): UserDataStore => ({
   servers: toServerSnapshots(raw.servers),
 });
 
-const resolveStorageKey = (options?: StorageOptions): string => options?.storageKey ?? STORAGE_KEY;
+/**
+ * There is no default key: until an account (or demo mode) provides one, user data cannot be
+ * read or written at all, so nothing leaks across accounts before identity is known.
+ */
+const resolveStorageKey = (options?: StorageOptions): string => {
+  if (!options?.storageKey) {
+    throw new Error('No user data storage key: sign in first');
+  }
+  return options.storageKey;
+};
 
 const migrateUserData = (data: UserDataStore): UserDataStore => {
   if (data.version > CURRENT_USER_DATA_VERSION) {
@@ -387,6 +408,23 @@ const preserveNewerPayload = (key: string, stored: string, options?: StorageOpti
     console.error('Failed to preserve newer-version user data; saving is paused', backupError);
   }
   if (preserved) notifyNewerPayloadPreserved();
+};
+
+/**
+ * Deletes the old unscoped user data and its newer-version backups. Builder decision
+ * 2026-10-07 (#9): the shared key could hold any account's data, so it is discarded rather
+ * than migrated to whoever signs in next. Deliberate data deletion; do not "fix" by migrating.
+ */
+export const discardLegacyUserData = (): void => {
+  const legacy = { storageKey: LEGACY_STORAGE_KEY };
+  try {
+    for (const backup of listUnsupportedBackups(legacy)) {
+      localStorage.removeItem(backup.key);
+    }
+    localStorage.removeItem(LEGACY_STORAGE_KEY);
+  } catch (error) {
+    console.error('Failed to discard legacy user data', error);
+  }
 };
 
 export const loadUserData = (options?: StorageOptions): UserDataStore => {

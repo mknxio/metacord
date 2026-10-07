@@ -1,4 +1,4 @@
-import { AuthError, fetchGuilds, fetchMe } from './lib/api';
+import { AuthError, fetchGuilds, fetchMe, type ApiUser } from './lib/api';
 import { createModalController } from './components/modal';
 import { createToastManager } from './components/toast';
 import { getElement, isDemoMode, state, storageOptions } from './lib/state';
@@ -22,7 +22,14 @@ import {
 } from './lib/fetch-orchestrator';
 import { hydrateDemo, setupDemoMode } from './lib/demo';
 import { renderUnsupportedDataNotice } from './lib/data-notice';
-import { onNewerPayloadPreserved, saveUserData, watchPersistedUserData } from './lib/storage';
+import {
+  discardLegacyUserData,
+  onNewerPayloadPreserved,
+  saveUserData,
+  watchPersistedUserData,
+  type UserDataStore,
+} from './lib/storage';
+import { activateAccount } from './lib/account';
 import { setupEvents } from './lib/events';
 
 // --- Error boundary ---
@@ -140,10 +147,16 @@ function renderDataNotice(): void {
 
 // --- App hydration ---
 
+const adoptExternalChange = (data: UserDataStore): void => {
+  state.userData = data;
+  render();
+  renderDataNotice();
+};
+
 const hydrateApp = async (): Promise<void> => {
+  let me: ApiUser;
   try {
-    const me = await fetchMe();
-    state.me = me.username;
+    me = await fetchMe();
   } catch (error) {
     if (error instanceof AuthError) {
       setScreen('login');
@@ -154,6 +167,10 @@ const hydrateApp = async (): Promise<void> => {
     return;
   }
 
+  state.me = me.username;
+  // Only now, with identity known, is any user data read (#9 per-account isolation).
+  activateAccount(me.id, adoptExternalChange);
+  renderDataNotice();
   setScreen('app');
 
   // Snapshots are reconciled inside syncGuildList only when the list loads successfully.
@@ -170,20 +187,13 @@ try {
   setFooterBuildInfo();
   setupEvents({ importModal, fetchModal, instructionsModal, demoModal, categoriesModal });
   setupDemoMode();
+  discardLegacyUserData();
   renderDataNotice();
   // Includes saves that preserve another tab's newer data before its storage event arrives.
   onNewerPayloadPreserved(renderDataNotice);
-  // Adopt saves from other tabs so later whole-store saves here do not overwrite them.
-  watchPersistedUserData(
-    () => state.userData,
-    (data) => {
-      state.userData = data;
-      render();
-      renderDataNotice();
-    },
-    storageOptions,
-  );
   if (isDemoMode) {
+    // Adopt saves from other demo tabs; signed-in accounts get theirs from activateAccount.
+    watchPersistedUserData(() => state.userData, adoptExternalChange, storageOptions);
     hydrateDemo();
   } else {
     void hydrateApp();

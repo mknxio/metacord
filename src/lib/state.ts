@@ -1,4 +1,4 @@
-import { loadUserData, type UserDataStore } from './storage';
+import { createDefaultUserData, loadUserData, type UserDataStore } from './storage';
 
 export type FilterKey = 'all' | 'owned' | 'partner' | 'verified' | 'boosted' | 'discoverable';
 export type BuiltinSectionKey = 'favorites' | 'owned' | 'public' | 'private' | 'departed';
@@ -23,6 +23,8 @@ export const filterTooltipCopy: Partial<Record<FilterKey, string>> = {
 export interface AppState {
   me: string | null;
   guilds: import('./api').ApiGuild[];
+  /** Discord user ID whose data `userData` holds; null until /api/me answers and after logout. */
+  accountId: string | null;
   /** True once `guilds` holds a successfully loaded list (live or demo) this session. */
   guildListLoaded: boolean;
   /** True while the latest guild-list load failed: only stored history is shown. */
@@ -111,14 +113,21 @@ export const saveSortPreference = (sort: SortKey): void => {
 export const collapsedSections = loadCollapsedSections();
 
 export const isDemoMode = new URLSearchParams(window.location.search).get('demo') === '1';
-export const storageOptions = isDemoMode ? { storageKey: DEMO_STORAGE_KEY } : undefined;
+/**
+ * Key of the user data this page reads and writes: the demo key, or the signed-in account's
+ * key once identity is known (see account.ts). Until then there is no key, so nothing is
+ * read or written. Mutated in place so every module holding this object follows it.
+ */
+export const storageOptions: { storageKey?: string } = isDemoMode ? { storageKey: DEMO_STORAGE_KEY } : {};
 
 export const state: AppState = {
   me: null,
+  accountId: null,
   guilds: [],
   guildListLoaded: false,
   guildListError: false,
-  userData: loadUserData(storageOptions),
+  // No account data before identity is known; demo mode has its own key from the start.
+  userData: isDemoMode ? loadUserData(storageOptions) : createDefaultUserData(),
   activeFilters: new Set<FilterKey>(),
   search: '',
   sort: loadSortPreference(),
