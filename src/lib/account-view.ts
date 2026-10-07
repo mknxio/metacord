@@ -1,4 +1,5 @@
 import { claimAccountReload, deactivateAccount } from './account';
+import { startCooldownTimer } from './fetch-orchestrator';
 import { render, setScreen } from './render';
 
 export const ACCOUNT_CHANGED_MESSAGE = 'Your Discord account changed in another tab. Reload the page to continue.';
@@ -23,6 +24,8 @@ export const invalidateAccountView = (message: string | null = null): void => {
   notice?.replaceChildren();
   notice?.classList.add('hidden');
   render();
+  // Drop the previous account's fetch cooldown from the controls.
+  startCooldownTimer();
   const status = document.getElementById('login-status');
   if (status) status.textContent = message ?? '';
 };

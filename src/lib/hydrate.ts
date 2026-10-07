@@ -6,6 +6,7 @@ import {
   readActiveAccountClaim,
 } from './account';
 import { handleAccountChanged } from './account-view';
+import { startCooldownTimer } from './fetch-orchestrator';
 import { StaleAccountError, type GuildSyncOutcome } from './guild-sync';
 import { render, setScreen, showToast } from './render';
 import { state } from './state';
@@ -77,6 +78,8 @@ export const verifyAndActivateAccount = async (
     if (claimNow !== claimBefore && claimNow !== me.id) continue;
     state.me = me.username;
     activateAccount(me.id, onExternalChange);
+    // Fetch controls were set up before identity: apply this account's cooldown now.
+    startCooldownTimer();
     return { status: 'active', me };
   }
   return { status: 'unsettled' };

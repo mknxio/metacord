@@ -19,7 +19,7 @@ vi.hoisted(() => {
 import { AccountMismatchError, fetchGuildMember, fetchGuilds, type ApiGuild, type ApiUser } from '../api';
 import { activateAccount, currentAccountEpoch, deactivateAccount, isAccountCurrent, watchAccountSwitch } from '../account';
 import { StaleAccountError, syncGuildList } from '../guild-sync';
-import { ACCOUNT_CHANGED_MESSAGE } from '../account-view';
+import { ACCOUNT_CHANGED_MESSAGE, invalidateAccountView } from '../account-view';
 import { applyGuildSyncOutcome, verifyAndActivateAccount } from '../hydrate';
 import { initShowToast, setScreen } from '../render';
 import { state, storageOptions } from '../state';
@@ -238,6 +238,25 @@ describe('verifyAndActivateAccount', () => {
     expect(state.userData.notes).toEqual({});
     expect(getItem.mock.calls.map(([key]) => key)).not.toContain(accountStorageKey(A));
     expect(localStorage.getItem(CLAIM_KEY)).toBe(B);
+  });
+
+  it('applies the account\'s fetch cooldown as soon as it activates, and drops it on sign-out', async () => {
+    const recent = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    localStorage.setItem(
+      accountStorageKey(A),
+      JSON.stringify({ ...createDefaultUserData(), lastFetchTimestamp: recent }),
+    );
+    const fetchButton = document.getElementById('btn-fetch') as HTMLButtonElement;
+    fetchButton.disabled = false;
+
+    await verifyAndActivateAccount(vi.fn().mockResolvedValue(user(A)), () => {});
+    expect(fetchButton.disabled).toBe(true);
+    expect(document.getElementById('fetch-tooltip')?.textContent).toContain('Cooldown active');
+    expect(document.getElementById('fetch-last-run')?.textContent).toContain('Last fetched');
+
+    invalidateAccountView();
+    expect(fetchButton.disabled).toBe(false);
+    expect(document.getElementById('fetch-last-run')?.textContent).toBe('');
   });
 
   it('activates the verified account when no other claim appeared', async () => {
