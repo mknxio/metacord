@@ -468,7 +468,8 @@ export const render = (): void => {
 
   // Search feedback and the empty state cover every rendered card, departed ones included.
   const cardTotal = allViews.length + allDeparted.length;
-  emptyState.classList.toggle('hidden', cardTotal > 0);
+  emptyState.classList.toggle('hidden', cardTotal > 0 || state.guildListError);
+  getElement<HTMLElement>('guild-list-error').classList.toggle('hidden', !state.guildListError);
   searchHelper.classList.toggle('hidden', state.search.trim().length > 0);
 
   // Update filter count badge

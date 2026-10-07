@@ -3,6 +3,7 @@ import { createModalController } from './components/modal';
 import { createToastManager } from './components/toast';
 import { getElement, isDemoMode, state, storageOptions } from './lib/state';
 import { syncGuildList } from './lib/guild-sync';
+import { applyGuildSyncOutcome } from './lib/hydrate';
 import {
   initDetailsModal,
   initSetScreen,
@@ -157,23 +158,9 @@ const hydrateApp = async (): Promise<void> => {
 
   // Snapshots are reconciled inside syncGuildList only when the list loads successfully.
   const outcome = await syncGuildList(fetchGuilds, () => state.userData, { storageOptions });
-  if (!outcome.ok) {
-    if (outcome.error instanceof AuthError) {
-      setScreen('login');
-      return;
-    }
-    showToast('Unable to load servers', { variant: 'error' });
-    return;
-  }
-  state.guilds = outcome.guilds;
-  state.guildListLoaded = true;
-  state.userData = outcome.userData;
-  render();
+  applyGuildSyncOutcome(outcome);
   // Syncing may have preserved newer-version data another tab saved meanwhile.
-  renderDataNotice();
-  if (!outcome.persisted) {
-    showToast('Server history could not be saved in this browser', { variant: 'error' });
-  }
+  if (outcome.ok) renderDataNotice();
 };
 
 // --- Boot ---

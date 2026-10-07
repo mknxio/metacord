@@ -25,6 +25,8 @@ export interface AppState {
   guilds: import('./api').ApiGuild[];
   /** True once `guilds` holds a successfully loaded list (live or demo) this session. */
   guildListLoaded: boolean;
+  /** True while the latest guild-list load failed: only stored history is shown. */
+  guildListError: boolean;
   userData: UserDataStore;
   activeFilters: Set<FilterKey>;
   search: string;
@@ -115,6 +117,7 @@ export const state: AppState = {
   me: null,
   guilds: [],
   guildListLoaded: false,
+  guildListError: false,
   userData: loadUserData(storageOptions),
   activeFilters: new Set<FilterKey>(),
   search: '',
