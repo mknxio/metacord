@@ -2,6 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   buildGuildListBody,
   buildGuildListCacheKey,
+  buildGuildMemberBody,
+  buildGuildMemberCacheKey,
+  GUILD_MEMBER_CACHE_VERSION,
   GUILD_LIST_CACHE_VERSION,
   GUILDS_LIST_PATH,
   transformGuild,
@@ -62,5 +65,31 @@ describe('buildGuildListCacheKey', () => {
     expect(key.searchParams.get('__guildListVersion')).toBe(GUILD_LIST_CACHE_VERSION);
     expect(key.toString()).not.toBe(buildUserCacheKey(request, '42').url);
     expect(buildGuildListCacheKey(request, '43').url).not.toBe(buildGuildListCacheKey(request, '42').url);
+  });
+});
+
+describe('buildGuildMemberBody', () => {
+  it('returns the session user id with the member details', () => {
+    const member = { nick: 'Nick', avatar: null, roles: ['r1'], joined_at: '2024-01-02T00:00:00.000Z' };
+    expect(buildGuildMemberBody('42', '9', member)).toEqual({
+      user_id: '42',
+      guild_id: '9',
+      joined_at: '2024-01-02T00:00:00.000Z',
+      nickname: 'Nick',
+      roles: ['r1'],
+      avatar: null,
+    });
+  });
+});
+
+describe('buildGuildMemberCacheKey', () => {
+  const request = new Request('https://metacord.example/api/guilds/9');
+
+  it('is per user, per guild and versioned, so bodies cached without user_id are not served', () => {
+    const key = new URL(buildGuildMemberCacheKey(request, '42').url);
+    expect(key.pathname).toBe('/api/guilds/9');
+    expect(key.searchParams.get('__cacheUser')).toBe('42');
+    expect(key.searchParams.get('__guildMemberVersion')).toBe(GUILD_MEMBER_CACHE_VERSION);
+    expect(key.toString()).not.toBe(buildUserCacheKey(request, '42').url);
   });
 });

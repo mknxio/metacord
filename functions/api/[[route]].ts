@@ -1,12 +1,17 @@
 import { Hono, type Context } from 'hono';
 import {
   buildCacheKey,
-  buildUserCacheKey,
   cachedJsonResponse,
   getCachedResponse,
 } from '../lib/cache';
 import { parseCookies, serializeCookie } from '../lib/cookies';
-import { buildGuildListBody, buildGuildListCacheKey, GUILDS_LIST_PATH } from '../lib/guilds';
+import {
+  buildGuildListBody,
+  buildGuildListCacheKey,
+  buildGuildMemberBody,
+  buildGuildMemberCacheKey,
+  GUILDS_LIST_PATH,
+} from '../lib/guilds';
 import { createPkceChallenge, createPkceVerifier } from '../lib/crypto';
 import { errorResponse, jsonResponse } from '../lib/http';
 import {
@@ -285,7 +290,7 @@ app.get('/api/guilds/:id', async (c) => {
     return errorResponse('Invalid guild ID format', 400);
   }
 
-  const cacheKey = buildUserCacheKey(c.req.raw, sessionContext.session.userId);
+  const cacheKey = buildGuildMemberCacheKey(c.req.raw, sessionContext.session.userId);
   const cached = await getCachedResponse(cacheKey, sessionContext.setCookie);
   if (cached) return cached;
 
@@ -319,13 +324,7 @@ app.get('/api/guilds/:id', async (c) => {
   return cachedJsonResponse(
     c.executionCtx,
     cacheKey,
-    {
-      guild_id: guildId,
-      joined_at: member.joined_at,
-      nickname: member.nick,
-      roles: member.roles,
-      avatar: member.avatar,
-    },
+    buildGuildMemberBody(sessionContext.session.userId, guildId, member),
     {
       ttlSeconds: 45,
       swrSeconds: 60,
