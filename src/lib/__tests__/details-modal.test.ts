@@ -41,7 +41,14 @@ import {
   openDetails,
   render,
 } from '../render';
-import { accountStorageKey, createDefaultUserData, reconcileServerSnapshots, type UserDataStore } from '../storage';
+import {
+  accountStorageKey,
+  createDefaultUserData,
+  loadUserData,
+  reconcileServerSnapshots,
+  saveUserData,
+  type UserDataStore,
+} from '../storage';
 
 const T1 = '2026-10-01T10:00:00.000Z';
 const T2 = '2026-10-02T10:00:00.000Z';
@@ -425,6 +432,71 @@ describe('account changes while requests are pending', () => {
     await pending;
     expect(detailsBody().querySelector('.save-later')).toBeNull();
     expect(detailsBody().textContent).not.toContain('Nick');
+  });
+});
+
+describe('another tab saving while a capture is pending', () => {
+  /** Simulates another tab's whole-store save before its storage event reaches this tab. */
+  const otherTabSavesNote = () => {
+    const key = accountStorageKey(ACCOUNT);
+    const stored = JSON.parse(localStorage.getItem(key) as string) as UserDataStore;
+    localStorage.setItem(key, JSON.stringify({ ...stored, notes: { ...stored.notes, [DEPARTED_ID]: 'from the other tab' } }));
+  };
+
+  it('keeps the other tab\'s note and the capture', async () => {
+    saveUserData(state.userData, storageOptions);
+    let resolveWidget: (value: Awaited<ReturnType<typeof fetchWidget>>) => void = () => {};
+    mockedFetchWidget.mockImplementation(() => new Promise((resolve) => (resolveWidget = resolve)));
+    const { button } = await openLiveDetails();
+    button.click();
+    await flush();
+
+    otherTabSavesNote();
+    resolveWidget({ instant_invite: 'https://discord.gg/widget', presence_count: 3 } as Awaited<
+      ReturnType<typeof fetchWidget>
+    >);
+    await flush();
+    await flush();
+
+    for (const data of [state.userData, loadUserData(storageOptions)]) {
+      expect(data.notes[DEPARTED_ID]).toBe('from the other tab');
+      expect(data.servers[LIVE_ID].savedAt).not.toBeNull();
+      expect(data.servers[LIVE_ID].invite).toMatchObject({ url: 'https://discord.gg/widget', source: 'widget' });
+    }
+  });
+
+  it('keeps the other tab\'s note when a refresh saves after its member request', async () => {
+    state.userData = {
+      ...state.userData,
+      servers: { ...state.userData.servers, [LIVE_ID]: { ...state.userData.servers[LIVE_ID], savedAt: T1 } },
+    };
+    saveUserData(state.userData, storageOptions);
+    const { button, inviteInput } = await openLiveDetails();
+    let resolveMember: (value: ApiGuildMember) => void = () => {};
+    mockedFetchGuildMember.mockImplementationOnce(() => new Promise((resolve) => (resolveMember = resolve)));
+    inviteInput.value = 'https://discord.gg/pasted';
+    button.click();
+    await flush();
+
+    otherTabSavesNote();
+    resolveMember(member);
+    await flush();
+    await flush();
+
+    const stored = loadUserData(storageOptions);
+    expect(stored.notes[DEPARTED_ID]).toBe('from the other tab');
+    expect(stored.servers[LIVE_ID].invite).toMatchObject({ url: 'https://discord.gg/pasted' });
+  });
+
+  it('keeps the other tab\'s note when saving details', async () => {
+    saveUserData(state.userData, storageOptions);
+    await openLiveDetails();
+    otherTabSavesNote();
+    const save = [...detailsBody().querySelectorAll<HTMLButtonElement>('.modal-actions button')].find(
+      (b) => b.textContent === 'Save',
+    ) as HTMLButtonElement;
+    save.click();
+    expect(loadUserData(storageOptions).notes[DEPARTED_ID]).toBe('from the other tab');
   });
 });
 

@@ -17,6 +17,7 @@ import {
   saveServerCapture,
   updateDepartureReason,
   updateWidgetCache,
+  readPersistedUserData,
   type InviteSnapshot,
   type MembershipSnapshot,
   type ServerSnapshot,
@@ -674,8 +675,9 @@ const resolveWidgetInvite = async (
     const widget = await fetchWidget(guildId);
     // The account changed while the widget loaded: its cache is no longer this data's.
     if (!isAccountCurrent(epoch)) return null;
+    // Build on what other tabs saved while the widget loaded, not this tab's stale copy.
     state.userData = updateWidgetCache(
-      state.userData,
+      readPersistedUserData(state.userData, storageOptions),
       guildId,
       {
         instantInvite: widget.instant_invite ?? null,
@@ -855,6 +857,9 @@ const createSaveForLaterSection = (
     // Requests resolved after a switch or logout: their results belong to no current data.
     if (!isAccountCurrent(epoch)) return;
 
+    // Another tab may have saved while the requests were pending, before its storage event
+    // reached this tab: apply the capture on top of the persisted data, as guild sync does.
+    state.userData = readPersistedUserData(state.userData, storageOptions);
     const next = saveServerCapture(
       state.userData,
       guild,
@@ -864,6 +869,7 @@ const createSaveForLaterSection = (
     );
     if (next === state.userData && isDeparted()) {
       showToast('This server is no longer in your server list. Nothing was saved.', { variant: 'error' });
+      render();
       return;
     }
     state.userData = next;
@@ -943,6 +949,7 @@ const openDepartedDetails = (snapshot: ServerSnapshot): void => {
   const saveButton = createElement('button', 'btn btn-primary', 'Save');
   saveButton.type = 'button';
   saveButton.addEventListener('click', () => {
+    state.userData = readPersistedUserData(state.userData, storageOptions);
     annotations.save();
     state.userData = updateDepartureReason(state.userData, guildId, reason.input.value, storageOptions);
     showToast('Details saved');
@@ -1077,6 +1084,7 @@ export const openDetails = async (guildId: string): Promise<void> => {
   const saveButton = createElement('button', 'btn btn-primary', 'Save');
   saveButton.type = 'button';
   saveButton.addEventListener('click', () => {
+    state.userData = readPersistedUserData(state.userData, storageOptions);
     annotations.save();
     state.userData = updateDepartureReason(state.userData, guildId, saveForLater.reasonInput.value, storageOptions);
     showToast('Details saved');
