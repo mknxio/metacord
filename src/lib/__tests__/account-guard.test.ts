@@ -16,11 +16,11 @@ vi.hoisted(() => {
   });
 });
 
-import { AccountMismatchError, fetchGuildMember, fetchGuilds, type ApiGuild } from '../api';
+import { AccountMismatchError, fetchGuildMember, fetchGuilds, type ApiGuild, type ApiUser } from '../api';
 import { activateAccount, currentAccountEpoch, deactivateAccount, isAccountCurrent, watchAccountSwitch } from '../account';
 import { StaleAccountError, syncGuildList } from '../guild-sync';
 import { ACCOUNT_CHANGED_MESSAGE } from '../account-view';
-import { applyGuildSyncOutcome } from '../hydrate';
+import { applyGuildSyncOutcome, verifyAndActivateAccount } from '../hydrate';
 import { initShowToast, setScreen } from '../render';
 import { state, storageOptions } from '../state';
 import { accountStorageKey, createDefaultUserData, reconcileServerSnapshots, saveUserData } from '../storage';
@@ -203,5 +203,72 @@ describe('a guild list that resolves after the account changed', () => {
     applyGuildSyncOutcome(outcome);
     expect(state.accountId).toBe(B);
     expect(state.guilds).toEqual([]);
+  });
+});
+
+describe('verifyAndActivateAccount', () => {
+  const CLAIM_KEY = 'discord_manager_active_account';
+  const user = (id: string): ApiUser => ({ id, username: `user-${id}`, avatar: null });
+  const deferred = () => {
+    let resolve: (value: ApiUser) => void = () => {};
+    const promise = new Promise<ApiUser>((done) => (resolve = done));
+    return { promise, resolve };
+  };
+
+  beforeEach(() => {
+    localStorage.setItem(accountStorageKey(A), JSON.stringify({ ...createDefaultUserData(), notes: { '1': 'A secret' } }));
+    localStorage.setItem(CLAIM_KEY, A);
+  });
+
+  it('re-verifies instead of activating a stale identity when another tab claims an account meanwhile', async () => {
+    const first = deferred();
+    const fetchIdentity = vi.fn().mockReturnValueOnce(first.promise).mockResolvedValueOnce(user(B));
+    const getItem = vi.spyOn(localStorage, 'getItem');
+
+    const pending = verifyAndActivateAccount(fetchIdentity, () => {});
+    // Another tab signs in as B (the shared cookie is now B's) before A's answer arrives.
+    localStorage.setItem(CLAIM_KEY, B);
+    window.dispatchEvent(new StorageEvent('storage', { key: CLAIM_KEY, newValue: B }));
+    first.resolve(user(A));
+    const result = await pending;
+
+    expect(fetchIdentity).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ status: 'active', me: { id: B } });
+    expect(state.accountId).toBe(B);
+    expect(state.userData.notes).toEqual({});
+    expect(getItem.mock.calls.map(([key]) => key)).not.toContain(accountStorageKey(A));
+    expect(localStorage.getItem(CLAIM_KEY)).toBe(B);
+  });
+
+  it('activates the verified account when no other claim appeared', async () => {
+    localStorage.setItem(CLAIM_KEY, B);
+    const result = await verifyAndActivateAccount(vi.fn().mockResolvedValue(user(A)), () => {});
+    expect(result).toMatchObject({ status: 'active' });
+    expect(state.accountId).toBe(A);
+    expect(state.userData.notes).toEqual({ '1': 'A secret' });
+    expect(localStorage.getItem(CLAIM_KEY)).toBe(A);
+  });
+
+  it('gives up without activating anything when claims keep changing', async () => {
+    let claim = 0;
+    const fetchIdentity = vi.fn(async () => {
+      claim += 1;
+      localStorage.setItem(CLAIM_KEY, `9${claim}`);
+      return user(A);
+    });
+    const result = await verifyAndActivateAccount(fetchIdentity, () => {}, 3);
+    expect(result).toEqual({ status: 'unsettled' });
+    expect(fetchIdentity).toHaveBeenCalledTimes(3);
+    expect(state.accountId).toBeNull();
+    expect(localStorage.getItem(CLAIM_KEY)).toBe('93');
+  });
+
+  it('stops when the page was invalidated while identity loaded', async () => {
+    const first = deferred();
+    const pending = verifyAndActivateAccount(() => first.promise, () => {});
+    deactivateAccount();
+    first.resolve(user(A));
+    expect(await pending).toEqual({ status: 'superseded' });
+    expect(state.accountId).toBeNull();
   });
 });

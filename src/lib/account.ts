@@ -39,6 +39,15 @@ export const activateAccount = (userId: string, onExternalChange: (data: UserDat
   }
 };
 
+/** The account most recently activated by any tab in this browser, or null. */
+export const readActiveAccountClaim = (): string | null => {
+  try {
+    return localStorage.getItem(ACTIVE_ACCOUNT_KEY);
+  } catch {
+    return null;
+  }
+};
+
 /**
  * Calls `onSwitched` when another tab signs in as a different account. The session cookie is
  * shared, so this tab's requests now act for that account and must not touch this one's data.

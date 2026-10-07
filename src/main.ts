@@ -1,9 +1,9 @@
-import { AuthError, fetchGuilds, fetchMe, type ApiUser } from './lib/api';
+import { AuthError, fetchGuilds, fetchMe } from './lib/api';
 import { createModalController } from './components/modal';
 import { createToastManager } from './components/toast';
 import { getElement, isDemoMode, state, storageOptions } from './lib/state';
 import { syncGuildList } from './lib/guild-sync';
-import { applyGuildSyncOutcome } from './lib/hydrate';
+import { applyGuildSyncOutcome, verifyAndActivateAccount, type IdentityResult } from './lib/hydrate';
 import {
   initAccountMismatch,
   initDetailsModal,
@@ -30,7 +30,7 @@ import {
   watchPersistedUserData,
   type UserDataStore,
 } from './lib/storage';
-import { activateAccount, currentAccountEpoch, isAccountCurrent, watchAccountSwitch } from './lib/account';
+import { currentAccountEpoch, isAccountCurrent, watchAccountSwitch } from './lib/account';
 import { handleAccountChanged } from './lib/account-view';
 import { setupEvents } from './lib/events';
 
@@ -157,9 +157,10 @@ const adoptExternalChange = (data: UserDataStore): void => {
 };
 
 const hydrateApp = async (): Promise<void> => {
-  let me: ApiUser;
+  let identity: IdentityResult;
   try {
-    me = await fetchMe();
+    // Only with identity verified is any user data read (#9 per-account isolation).
+    identity = await verifyAndActivateAccount(fetchMe, adoptExternalChange);
   } catch (error) {
     if (error instanceof AuthError) {
       setScreen('login');
@@ -169,10 +170,12 @@ const hydrateApp = async (): Promise<void> => {
     showToast('Unable to verify session', { variant: 'error' });
     return;
   }
-
-  state.me = me.username;
-  // Only now, with identity known, is any user data read (#9 per-account isolation).
-  activateAccount(me.id, adoptExternalChange);
+  if (identity.status === 'superseded') return;
+  if (identity.status === 'unsettled') {
+    handleAccountChanged();
+    return;
+  }
+  const { me } = identity;
   renderDataNotice();
   setScreen('app');
 
