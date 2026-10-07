@@ -17,8 +17,8 @@ vi.hoisted(() => {
 });
 
 import { AccountMismatchError, fetchGuildMember, fetchGuilds, type ApiGuild } from '../api';
-import { activateAccount, deactivateAccount, watchAccountSwitch } from '../account';
-import { syncGuildList } from '../guild-sync';
+import { activateAccount, currentAccountEpoch, deactivateAccount, isAccountCurrent, watchAccountSwitch } from '../account';
+import { StaleAccountError, syncGuildList } from '../guild-sync';
 import { ACCOUNT_CHANGED_MESSAGE } from '../account-view';
 import { applyGuildSyncOutcome } from '../hydrate';
 import { initShowToast, setScreen } from '../render';
@@ -74,9 +74,19 @@ describe('fetchGuilds', () => {
   });
 
   it('revalidates member requests too', async () => {
-    const fetchSpy = respondWith({ guild_id: '1' });
-    await fetchGuildMember('1');
+    const fetchSpy = respondWith({ user_id: A, guild_id: '1' });
+    await fetchGuildMember('1', A);
     expect(fetchSpy.mock.calls[0][1]).toMatchObject({ cache: 'no-cache' });
+  });
+
+  it.each([
+    ['another account', { user_id: B, guild_id: '1', nickname: 'B nick' }, B],
+    ['no user id', { guild_id: '1', nickname: 'B nick' }, null],
+  ])('refuses member details for %s', async (_label, body, actual) => {
+    respondWith(body);
+    const error = await fetchGuildMember('1', A).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(AccountMismatchError);
+    expect(error).toMatchObject({ expected: A, actual });
   });
 });
 
@@ -167,5 +177,31 @@ describe('watchAccountSwitch', () => {
   it('is announced when an account is activated', () => {
     activateAccount(B, () => {});
     expect(localStorage.getItem('discord_manager_active_account')).toBe(B);
+  });
+});
+
+describe('a guild list that resolves after the account changed', () => {
+  it('is dropped without reconciling or writing', async () => {
+    activateAccount(A, () => {});
+    saveUserData(reconcileServerSnapshots(createDefaultUserData(), [guild('1')], T1), storageOptions);
+    activateAccount(A, () => {});
+    const epoch = currentAccountEpoch();
+    let resolveFetch: (guilds: ApiGuild[]) => void = () => {};
+    const pending = syncGuildList(
+      () => new Promise<ApiGuild[]>((resolve) => (resolveFetch = resolve)),
+      () => state.userData,
+      { storageOptions, isCurrent: () => isAccountCurrent(epoch) },
+    );
+    activateAccount(B, () => {});
+    const setItem = vi.spyOn(localStorage, 'setItem');
+    resolveFetch([guild('9')]);
+    const outcome = await pending;
+
+    expect(outcome).toMatchObject({ ok: false });
+    expect(!outcome.ok && outcome.error).toBeInstanceOf(StaleAccountError);
+    expect(setItem).not.toHaveBeenCalled();
+    applyGuildSyncOutcome(outcome);
+    expect(state.accountId).toBe(B);
+    expect(state.guilds).toEqual([]);
   });
 });

@@ -21,10 +21,20 @@ vi.mock('../api', async (importOriginal) => {
   return { ...actual, fetchGuildMember: vi.fn(), fetchWidget: vi.fn() };
 });
 
-import { AuthError, RateLimitError, fetchGuildMember, fetchWidget, type ApiGuild, type ApiGuildMember } from '../api';
+import {
+  AccountMismatchError,
+  AuthError,
+  RateLimitError,
+  fetchGuildMember,
+  fetchWidget,
+  type ApiGuild,
+  type ApiGuildMember,
+} from '../api';
+import { activateAccount } from '../account';
 import { state, storageOptions } from '../state';
 import {
   confirmForget,
+  initAccountMismatch,
   initDetailsModal,
   initShowToast,
   initWidgetRateLimit,
@@ -35,6 +45,7 @@ import { accountStorageKey, createDefaultUserData, reconcileServerSnapshots, typ
 
 const T1 = '2026-10-01T10:00:00.000Z';
 const T2 = '2026-10-02T10:00:00.000Z';
+const ACCOUNT = '1000';
 const LIVE_ID = '111';
 const DEPARTED_ID = '222';
 
@@ -115,7 +126,7 @@ beforeAll(() => {
 beforeEach(() => {
   vi.clearAllMocks();
   // Signed in: saves go to this account's key.
-  storageOptions.storageKey = accountStorageKey('1000');
+  activateAccount(ACCOUNT, () => {});
   rateLimit.isActive.mockReturnValue(false);
   mockedFetchGuildMember.mockResolvedValue(member);
   state.guilds = [liveGuild];
@@ -349,6 +360,71 @@ describe('a departure noticed by another tab', () => {
     expect(mockedFetchGuildMember).toHaveBeenCalledTimes(2);
     expect(state.userData.servers[LIVE_ID].departedAt).toBeNull();
     expect(state.userData.servers[LIVE_ID].savedAt).not.toBeNull();
+  });
+});
+
+describe('account changes while requests are pending', () => {
+  const OTHER = '2000';
+  const onMismatch = vi.fn();
+  const storedEntries = () =>
+    [...Array(localStorage.length).keys()].map((index) => {
+      const key = localStorage.key(index) as string;
+      return [key, localStorage.getItem(key)];
+    });
+
+  beforeEach(() => {
+    onMismatch.mockClear();
+    initAccountMismatch(onMismatch);
+  });
+
+  it('rejects member details issued for another account and saves nothing', async () => {
+    state.userData = {
+      ...state.userData,
+      servers: { ...state.userData.servers, [LIVE_ID]: { ...state.userData.servers[LIVE_ID], savedAt: T1 } },
+    };
+    const before = state.userData;
+    const { button } = await openLiveDetails();
+    expect(mockedFetchGuildMember).toHaveBeenCalledWith(LIVE_ID, ACCOUNT);
+    mockedFetchGuildMember.mockRejectedValueOnce(new AccountMismatchError(ACCOUNT, OTHER));
+    const stored = storedEntries();
+    await clickAndSettle(button);
+
+    expect(onMismatch).toHaveBeenCalledTimes(1);
+    expect(state.userData).toBe(before);
+    expect(storedEntries()).toEqual(stored);
+  });
+
+  it('drops a capture whose requests resolve after the account changed', async () => {
+    let resolveWidget: (value: Awaited<ReturnType<typeof fetchWidget>>) => void = () => {};
+    mockedFetchWidget.mockImplementation(() => new Promise((resolve) => (resolveWidget = resolve)));
+    const { button } = await openLiveDetails();
+    button.click();
+    await flush();
+
+    activateAccount(OTHER, () => {});
+    const otherData = state.userData;
+    const stored = storedEntries();
+    resolveWidget({ instant_invite: 'https://discord.gg/late', presence_count: 3 } as Awaited<
+      ReturnType<typeof fetchWidget>
+    >);
+    await flush();
+    await flush();
+
+    expect(state.userData).toBe(otherData);
+    expect(state.userData.servers[LIVE_ID]).toBeUndefined();
+    expect(storedEntries()).toEqual(stored);
+  });
+
+  it('renders nothing when the member response arrives after the account changed', async () => {
+    let resolveMember: (value: ApiGuildMember) => void = () => {};
+    mockedFetchGuildMember.mockImplementationOnce(() => new Promise((resolve) => (resolveMember = resolve)));
+    const pending = openDetails(LIVE_ID);
+    activateAccount(OTHER, () => {});
+    state.guilds = [liveGuild];
+    resolveMember(member);
+    await pending;
+    expect(detailsBody().querySelector('.save-later')).toBeNull();
+    expect(detailsBody().textContent).not.toContain('Nick');
   });
 });
 

@@ -19,6 +19,16 @@ export type GuildSyncOutcome =
 interface GuildSyncOptions {
   now?: () => string;
   storageOptions?: { storageKey?: string };
+  /** False once the account this sync started for is no longer active (see account.ts). */
+  isCurrent?: () => boolean;
+}
+
+/** The account changed while the guild list loaded; its result was dropped unapplied. */
+export class StaleAccountError extends Error {
+  constructor() {
+    super('The account changed while the guild list loaded');
+    this.name = 'StaleAccountError';
+  }
 }
 
 /**
@@ -54,6 +64,10 @@ export const syncGuildList = async (
   // Safety guard: never reconcile snapshots without a successful guild list.
   if (guilds === null) {
     return { ok: false, error, userData: getUserData() };
+  }
+  // Nor for an account that is no longer active: its data may now be another account's.
+  if (options.isCurrent && !options.isCurrent()) {
+    return { ok: false, error: new StaleAccountError(), userData: getUserData() };
   }
 
   const nowIso = options.now?.() ?? new Date().toISOString();

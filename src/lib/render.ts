@@ -1,4 +1,5 @@
 import {
+  AccountMismatchError,
   AuthError,
   RateLimitError,
   fetchGuildMember,
@@ -6,6 +7,7 @@ import {
   type ApiGuild,
   type ApiGuildMember,
 } from './api';
+import { currentAccountEpoch, isAccountCurrent } from './account';
 import {
   toggleFavorite,
   updateNickname,
@@ -637,6 +639,15 @@ export const initWidgetRateLimit = (hooks: WidgetRateLimitHooks): void => {
   _widgetRateLimit = hooks;
 };
 
+// --- Account mismatch ---
+
+/** Runs when a member response belongs to another account (see account-view.ts). */
+let _onAccountMismatch: () => void = () => {};
+
+export const initAccountMismatch = (handler: () => void): void => {
+  _onAccountMismatch = handler;
+};
+
 const formatCount = (value: number | null | undefined): string =>
   typeof value === 'number' ? formatNumber(value) : 'Unknown';
 
@@ -645,7 +656,11 @@ const formatCount = (value: number | null | undefined): string =>
  * widget request (skipped while a rate-limit window is active). Returns null when there
  * is none; AuthError is rethrown for the caller.
  */
-const resolveWidgetInvite = async (guildId: string, nowIso: string): Promise<InviteSnapshot | null> => {
+const resolveWidgetInvite = async (
+  guildId: string,
+  nowIso: string,
+  epoch: number,
+): Promise<InviteSnapshot | null> => {
   const cachedUrl = normalizeInviteUrl(state.userData.widgetCache[guildId]?.instantInvite ?? '');
   if (cachedUrl) {
     return { url: cachedUrl, source: 'widget', capturedAt: nowIso };
@@ -657,6 +672,8 @@ const resolveWidgetInvite = async (guildId: string, nowIso: string): Promise<Inv
   }
   try {
     const widget = await fetchWidget(guildId);
+    // The account changed while the widget loaded: its cache is no longer this data's.
+    if (!isAccountCurrent(epoch)) return null;
     state.userData = updateWidgetCache(
       state.userData,
       guildId,
@@ -703,25 +720,31 @@ const toMembershipSnapshot = (member: ApiGuildMember, capturedAt: string): Membe
 /**
  * Refresh capture fetches membership again rather than re-stamping what the modal loaded.
  * Returns null (saveServerCapture then keeps the previous capture and its timestamp) when
- * that fetch fails; AuthError is rethrown for the caller.
+ * that fetch fails; AuthError and AccountMismatchError are rethrown for the caller.
  */
 const fetchFreshMembership = async (guildId: string): Promise<MembershipSnapshot | null> => {
-  if (isDemoMode) return null;
+  const accountId = state.accountId;
+  if (isDemoMode || accountId === null) return null;
   try {
-    const fresh = await fetchGuildMember(guildId);
+    const fresh = await fetchGuildMember(guildId, accountId);
     return toMembershipSnapshot(fresh, new Date().toISOString());
   } catch (error) {
-    if (error instanceof AuthError) throw error;
+    if (error instanceof AuthError || error instanceof AccountMismatchError) throw error;
     showToast('Membership details could not be refreshed; kept the previous capture.', { variant: 'info' });
     return null;
   }
 };
 
-/** `memberReceivedAt` is when `member` (loaded with the modal) arrived; it dates that capture. */
+/**
+ * `memberReceivedAt` is when `member` (loaded with the modal) arrived; it dates that capture.
+ * `epoch` is the account epoch the modal was opened under: a capture never saves once the
+ * account changed since then.
+ */
 const createSaveForLaterSection = (
   guild: ApiGuild,
   member: ApiGuildMember | null,
   memberReceivedAt: string | null,
+  epoch: number,
 ): { element: HTMLElement; reasonInput: HTMLTextAreaElement } => {
   const guildId = guild.id;
   const section = createElement('section', 'save-later');
@@ -781,6 +804,7 @@ const createSaveForLaterSection = (
   updateButtonLabel();
 
   captureButton.addEventListener('click', async () => {
+    if (!isAccountCurrent(epoch)) return;
     inviteError.textContent = '';
     inviteInput.removeAttribute('aria-invalid');
     const nowIso = new Date().toISOString();
@@ -807,21 +831,29 @@ const createSaveForLaterSection = (
     captureButton.disabled = true;
     try {
       if (!invite) {
-        invite = await resolveWidgetInvite(guildId, nowIso);
+        invite = await resolveWidgetInvite(guildId, nowIso, epoch);
       }
       if (wasSaved || isDeparted()) {
         membership = await fetchFreshMembership(guildId);
         memberConfirmed = membership !== null;
       }
     } catch (error) {
+      if (!isAccountCurrent(epoch)) return;
       if (error instanceof AuthError) {
         setScreen('login');
+        return;
+      }
+      if (error instanceof AccountMismatchError) {
+        _onAccountMismatch();
         return;
       }
       throw error;
     } finally {
       captureButton.disabled = false;
     }
+
+    // Requests resolved after a switch or logout: their results belong to no current data.
+    if (!isAccountCurrent(epoch)) return;
 
     const next = saveServerCapture(
       state.userData,
@@ -941,6 +973,9 @@ export const openDetails = async (guildId: string): Promise<void> => {
     }
     return;
   }
+  const accountId = state.accountId;
+  if (!isDemoMode && accountId === null) return;
+  const epoch = currentAccountEpoch();
   const detailsBody = getElement<HTMLElement>('details-body');
   detailsBody.replaceChildren();
 
@@ -950,19 +985,26 @@ export const openDetails = async (guildId: string): Promise<void> => {
 
   let member: ApiGuildMember | null = null;
   let memberReceivedAt: string | null = null;
-  if (!isDemoMode) {
+  if (!isDemoMode && accountId !== null) {
     try {
-      member = await fetchGuildMember(guildId);
+      member = await fetchGuildMember(guildId, accountId);
       memberReceivedAt = new Date().toISOString();
     } catch (error) {
+      if (!isAccountCurrent(epoch)) return;
       if (error instanceof AuthError) {
         setScreen('login');
+        return;
+      }
+      if (error instanceof AccountMismatchError) {
+        _onAccountMismatch();
         return;
       }
       detailsBody.replaceChildren(createElement('p', 'muted', 'Unable to load server details.'));
       return;
     }
   }
+  // The account changed while the member request was pending: render nothing.
+  if (!isAccountCurrent(epoch)) return;
 
   detailsBody.replaceChildren();
   detailsBody.appendChild(
@@ -1028,7 +1070,7 @@ export const openDetails = async (guildId: string): Promise<void> => {
   const annotations = createAnnotationFields(guildId);
   detailsBody.appendChild(annotations.element);
 
-  const saveForLater = createSaveForLaterSection(server, member, memberReceivedAt);
+  const saveForLater = createSaveForLaterSection(server, member, memberReceivedAt, epoch);
   detailsBody.appendChild(saveForLater.element);
 
   const actions = createElement('div', 'modal-actions');

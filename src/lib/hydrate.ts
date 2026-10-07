@@ -1,7 +1,7 @@
 import { AccountMismatchError, AuthError } from './api';
 import { clearAccountReloadGuard } from './account';
 import { handleAccountChanged } from './account-view';
-import type { GuildSyncOutcome } from './guild-sync';
+import { StaleAccountError, type GuildSyncOutcome } from './guild-sync';
 import { render, setScreen, showToast } from './render';
 import { state } from './state';
 
@@ -19,6 +19,8 @@ export const applyGuildSyncOutcome = (
       setScreen('login');
       return;
     }
+    // Whatever invalidated the account already replaced the view.
+    if (outcome.error instanceof StaleAccountError) return;
     if (outcome.error instanceof AccountMismatchError) {
       // The list belongs to another account (signed in from another tab): nothing was
       // reconciled or written. Drop this account's view and re-hydrate as the new one.

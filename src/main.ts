@@ -5,6 +5,7 @@ import { getElement, isDemoMode, state, storageOptions } from './lib/state';
 import { syncGuildList } from './lib/guild-sync';
 import { applyGuildSyncOutcome } from './lib/hydrate';
 import {
+  initAccountMismatch,
   initDetailsModal,
   initSetScreen,
   initShowToast,
@@ -29,7 +30,7 @@ import {
   watchPersistedUserData,
   type UserDataStore,
 } from './lib/storage';
-import { activateAccount, watchAccountSwitch } from './lib/account';
+import { activateAccount, currentAccountEpoch, isAccountCurrent, watchAccountSwitch } from './lib/account';
 import { handleAccountChanged } from './lib/account-view';
 import { setupEvents } from './lib/events';
 
@@ -104,6 +105,7 @@ initShowToast(toast, appShell);
 initSetScreen(closeAppOverlays);
 initDetailsModal(detailsModal);
 initFetchOrchestrator(fetchModal);
+initAccountMismatch(() => handleAccountChanged());
 initWidgetRateLimit({
   isActive: () => fetchState.rateLimitUntil !== null && fetchState.rateLimitUntil > Date.now(),
   report: (retryAfterSeconds) => {
@@ -176,7 +178,11 @@ const hydrateApp = async (): Promise<void> => {
 
   // Snapshots are reconciled inside syncGuildList only when the list loads successfully.
   // fetchGuilds refuses a list for any account other than the one whose data is loaded.
-  const outcome = await syncGuildList(() => fetchGuilds(me.id), () => state.userData, { storageOptions });
+  const epoch = currentAccountEpoch();
+  const outcome = await syncGuildList(() => fetchGuilds(me.id), () => state.userData, {
+    storageOptions,
+    isCurrent: () => isAccountCurrent(epoch),
+  });
   applyGuildSyncOutcome(outcome);
   // Syncing may have preserved newer-version data another tab saved meanwhile.
   if (outcome.ok) renderDataNotice();

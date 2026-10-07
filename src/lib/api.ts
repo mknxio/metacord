@@ -8,6 +8,8 @@ export type ApiGuild = DiscordGuild;
 
 /** Member info returned by the /api/guilds/:id endpoint */
 export interface ApiGuildMember {
+  /** The session's Discord user ID (see fetchGuildMember). */
+  user_id?: string;
   guild_id: string;
   joined_at?: string | null;
   roles?: string[];
@@ -113,8 +115,18 @@ export async function fetchGuilds(accountId: string): Promise<ApiGuild[]> {
   return response.guilds;
 }
 
-export function fetchGuildMember(guildId: string): Promise<ApiGuildMember> {
-  return apiRequest<ApiGuildMember>(`/api/guilds/${guildId}`, { cache: 'no-cache' });
+/**
+ * Loads the session's membership in a guild and refuses it (AccountMismatchError) unless it
+ * was issued for `accountId`: the shared session cookie may already belong to an account
+ * another tab signed in as, before that tab announces the switch.
+ */
+export async function fetchGuildMember(guildId: string, accountId: string): Promise<ApiGuildMember> {
+  const member = await apiRequest<ApiGuildMember>(`/api/guilds/${guildId}`, { cache: 'no-cache' });
+  const userId = typeof member.user_id === 'string' ? member.user_id : null;
+  if (userId !== accountId) {
+    throw new AccountMismatchError(accountId, userId);
+  }
+  return member;
 }
 
 export function fetchWidget(guildId: string): Promise<ApiWidget> {

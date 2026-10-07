@@ -2,6 +2,18 @@ import { accountStorageKey, createDefaultUserData, loadUserData, watchPersistedU
 import { state, storageOptions } from './state';
 
 let stopWatching: (() => void) | null = null;
+let accountEpoch = 0;
+
+/** Changes on every activation and deactivation, so async work can tell the account changed. */
+export const currentAccountEpoch = (): number => accountEpoch;
+
+/**
+ * True while the user data active when `epoch` was taken is still active (an account, or demo
+ * mode). Async work checks this before rendering or saving its result, so a response that
+ * arrives after a switch or logout is dropped instead of reaching another account's data.
+ */
+export const isAccountCurrent = (epoch: number): boolean =>
+  epoch === accountEpoch && storageOptions.storageKey !== undefined;
 
 /** The account this browser's tabs last signed in as, so other tabs notice a switch. */
 const ACTIVE_ACCOUNT_KEY = 'discord_manager_active_account';
@@ -15,6 +27,7 @@ const ACCOUNT_RELOAD_GUARD_KEY = 'discord_manager_account_reload';
  */
 export const activateAccount = (userId: string, onExternalChange: (data: UserDataStore) => void): void => {
   deactivateAccount();
+  accountEpoch += 1;
   storageOptions.storageKey = accountStorageKey(userId);
   state.accountId = userId;
   state.userData = loadUserData(storageOptions);
@@ -63,6 +76,7 @@ export const clearAccountReloadGuard = (): void => {
 
 /** Signs this page out of the account's data. Data at rest stays under that account's key. */
 export const deactivateAccount = (): void => {
+  accountEpoch += 1;
   stopWatching?.();
   stopWatching = null;
   delete storageOptions.storageKey;
