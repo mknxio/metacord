@@ -1,7 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createMockKV } from '../../../tests/helpers';
 import { app } from '../../api/[[route]]';
-import { getSessionContext, isSessionRevoked, persistSession, revokeSession } from '../session';
+import {
+  getSessionContext,
+  isSessionRevoked,
+  persistSession,
+  refreshSession,
+  revokeSession,
+  UPSTREAM_TIMEOUT_MS,
+} from '../session';
 import type { Env, SessionData } from '../types';
 
 const ORIGIN = 'http://metacord.test';
@@ -215,5 +222,108 @@ describe('refusals never clear the cookie', () => {
     expect(response.status).toBe(401);
     expect(response.headers.getSetCookie()).toEqual([]);
     expect(await env.SESSIONS.get('session-a')).toBeNull();
+  });
+});
+
+/** In-memory KV that honours expirationTtl against Date.now(), so fake clocks expire keys. */
+function createExpiringKV(): KVNamespace {
+  const store = new Map<string, { value: string; expiresAt: number | null }>();
+  const live = (key: string) => {
+    const entry = store.get(key);
+    if (entry && entry.expiresAt !== null && entry.expiresAt <= Date.now()) store.delete(key);
+    return store.get(key) ?? null;
+  };
+  return {
+    get: (async (key: string, type?: string) => {
+      const entry = live(key);
+      if (!entry) return null;
+      return type === 'json' ? JSON.parse(entry.value) : entry.value;
+    }) as KVNamespace['get'],
+    put: (async (key: string, value: string, options?: KVNamespacePutOptions) => {
+      const ttl = options?.expirationTtl;
+      store.set(key, { value, expiresAt: ttl ? Date.now() + ttl * 1000 : null });
+    }) as KVNamespace['put'],
+    delete: (async (key: string) => {
+      store.delete(key);
+    }) as KVNamespace['delete'],
+  } as KVNamespace;
+}
+
+/** Discord's token endpoint answering only after `delayMs`, unless the request is aborted. */
+const slowTokenEndpoint = (delayMs: number) =>
+  vi.spyOn(globalThis, 'fetch').mockImplementation(
+    (_input, init) =>
+      new Promise<Response>((resolve, reject) => {
+        const timer = setTimeout(
+          () => resolve(Response.json({ access_token: 'access-new', refresh_token: 'refresh-new', expires_in: 3600 })),
+          delayMs,
+        );
+        init?.signal?.addEventListener('abort', () => {
+          clearTimeout(timer);
+          reject(init.signal?.reason);
+        });
+      }),
+  );
+
+describe('revocation lifetime', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    env.SESSIONS = createExpiringKV();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('keeps a tombstone for a day', async () => {
+    await revokeSession('session-a', env);
+    await vi.advanceTimersByTimeAsync(23 * HOUR);
+    expect(await isSessionRevoked('session-a', env)).toBe(true);
+  });
+
+  it('aborts a refresh that would finish after the tombstone expires, so logout sticks', async () => {
+    // Close to expiry, so the next request refreshes the token.
+    await persistSession('session-a', { ...sessionFor('A'), expiresAt: Date.now() + 60_000 }, env);
+    slowTokenEndpoint(25 * HOUR);
+
+    const pending = getSessionContext(requestWithCookie('/api/me', 'session=session-a'), env);
+    await vi.advanceTimersByTimeAsync(1); // the request has read the record
+    await revokeSession('session-a', env); // logout while the refresh is in flight
+    await vi.advanceTimersByTimeAsync(25 * HOUR);
+    const context = await pending;
+
+    expect(context.session).toBeNull();
+    expect(context.setCookie).toBeUndefined();
+    expect(await env.SESSIONS.get('session-a')).toBeNull();
+  });
+
+  it('bounds each Discord call', async () => {
+    slowTokenEndpoint(UPSTREAM_TIMEOUT_MS + 1);
+    const refreshing = refreshSession('session-a', sessionFor('A'), env).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(UPSTREAM_TIMEOUT_MS);
+    expect(await refreshing).toBeInstanceOf(Error);
+    expect(await env.SESSIONS.get('session-a')).toBeNull();
+  });
+});
+
+describe('refreshSession', () => {
+  it('does not restore a session revoked while the refresh was in flight', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      Response.json({ access_token: 'access-new', refresh_token: 'refresh-new', expires_in: 3600 }),
+    );
+    await persistSession('session-a', sessionFor('A'), env);
+    const kv = env.SESSIONS;
+    const put = kv.put.bind(kv);
+    let raced = false;
+    vi.spyOn(kv, 'put').mockImplementation((async (key: string, value: string, options?: KVNamespacePutOptions) => {
+      if (key === 'session-a' && !raced) {
+        raced = true;
+        await revokeSession('session-a', env);
+      }
+      return put(key, value, options);
+    }) as KVNamespace['put']);
+
+    expect(await refreshSession('session-a', sessionFor('A'), env)).toBeNull();
+    expect(await kv.get('session-a')).toBeNull();
   });
 });

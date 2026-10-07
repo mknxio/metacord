@@ -18,6 +18,7 @@ import {
   buildClearSessionCookie,
   buildSessionCookie,
   deleteSession,
+  fetchWithTimeout,
   getSessionCookieName,
   getSessionContext,
   isSecureContext,
@@ -466,7 +467,7 @@ async function fetchDiscordWithRefresh(
     return { response: new Response(null, { status: 401 }), session: null };
   }
 
-  let response = await fetch(url, {
+  let response = await fetchWithTimeout(url, {
     headers: {
       Authorization: `Bearer ${sessionContext.session.accessToken}`,
     },
@@ -488,7 +489,7 @@ async function fetchDiscordWithRefresh(
     return { response, session: null };
   }
 
-  response = await fetch(url, {
+  response = await fetchWithTimeout(url, {
     headers: {
       Authorization: `Bearer ${refreshed.accessToken}`,
     },

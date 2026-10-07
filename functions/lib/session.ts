@@ -8,10 +8,18 @@ const SESSION_TTL_SECONDS = 60 * 30;
 const REFRESH_WINDOW_MS = 5 * 60 * 1000;
 const DISCORD_TOKEN_URL = 'https://discord.com/api/oauth2/token';
 /**
- * Revocation tombstones outlive any record a racing renewal could rewrite: such a write
- * lands at most one request's duration after revocation and expires SESSION_TTL later.
+ * Each Discord call made while handling a session is aborted after this long, so a request
+ * that read a session record can only write it back within a bounded time: at most a few
+ * such calls (refresh, upstream request, refresh, retry) plus KV operations, about a minute.
  */
-const REVOKED_TTL_SECONDS = SESSION_TTL_SECONDS * 2;
+export const UPSTREAM_TIMEOUT_MS = 10_000;
+
+/**
+ * Revocation tombstones must outlive any request that read the record before revocation and
+ * could rewrite it afterwards. Requests are bounded by UPSTREAM_TIMEOUT_MS to about a minute;
+ * a day leaves an ample margin (and covers the 30-minute rolling session several times over).
+ */
+const REVOKED_TTL_SECONDS = 24 * 60 * 60;
 
 const revokedKey = (sessionId: string): string => `revoked:${sessionId}`;
 
@@ -59,6 +67,20 @@ export function buildClearSessionCookie(secure: boolean = true): string {
     sameSite: 'Lax',
     maxAge: 0,
   });
+}
+
+/** fetch with UPSTREAM_TIMEOUT_MS: rejects (and aborts the request) when Discord is too slow. */
+export async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(new Error(`Discord request timed out after ${UPSTREAM_TIMEOUT_MS} ms`)),
+    UPSTREAM_TIMEOUT_MS,
+  );
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 export async function getSessionContext(request: Request, env: Env): Promise<SessionContext> {
@@ -169,7 +191,7 @@ export async function refreshSession(
   if (!session.refreshToken) {
     return null;
   }
-  const response = await fetch(DISCORD_TOKEN_URL, {
+  const response = await fetchWithTimeout(DISCORD_TOKEN_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
@@ -197,5 +219,10 @@ export async function refreshSession(
   };
 
   await persistSession(sessionId, refreshed, env);
+  // As in getSessionContext: a revocation that landed during the refresh wins over this write.
+  if (await isSessionRevoked(sessionId, env)) {
+    await deleteSession(sessionId, env);
+    return null;
+  }
   return refreshed;
 }
