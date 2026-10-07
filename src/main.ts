@@ -29,7 +29,7 @@ import {
   watchPersistedUserData,
   type UserDataStore,
 } from './lib/storage';
-import { activateAccount } from './lib/account';
+import { activateAccount, reloadForAccountChange, watchAccountSwitch } from './lib/account';
 import { setupEvents } from './lib/events';
 
 // --- Error boundary ---
@@ -174,7 +174,8 @@ const hydrateApp = async (): Promise<void> => {
   setScreen('app');
 
   // Snapshots are reconciled inside syncGuildList only when the list loads successfully.
-  const outcome = await syncGuildList(fetchGuilds, () => state.userData, { storageOptions });
+  // fetchGuilds refuses a list for any account other than the one whose data is loaded.
+  const outcome = await syncGuildList(() => fetchGuilds(me.id), () => state.userData, { storageOptions });
   applyGuildSyncOutcome(outcome);
   // Syncing may have preserved newer-version data another tab saved meanwhile.
   if (outcome.ok) renderDataNotice();
@@ -196,6 +197,11 @@ try {
     watchPersistedUserData(() => state.userData, adoptExternalChange, storageOptions);
     hydrateDemo();
   } else {
+    // Another tab signed in as a different account: this tab's requests now act for it.
+    watchAccountSwitch(() => {
+      reloadForAccountChange();
+      render();
+    });
     void hydrateApp();
   }
 } catch (error) {

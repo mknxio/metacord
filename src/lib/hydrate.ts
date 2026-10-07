@@ -1,4 +1,5 @@
-import { AuthError } from './api';
+import { AccountMismatchError, AuthError } from './api';
+import { clearAccountReloadGuard, reloadForAccountChange } from './account';
 import type { GuildSyncOutcome } from './guild-sync';
 import { render, setScreen, showToast } from './render';
 import { state } from './state';
@@ -8,10 +9,23 @@ import { state } from './state';
  * expired session) still renders the history stored in this browser, but never reconciles
  * against the missing list: current servers stay unknown rather than being marked departed.
  */
-export const applyGuildSyncOutcome = (outcome: GuildSyncOutcome): void => {
+export const applyGuildSyncOutcome = (
+  outcome: GuildSyncOutcome,
+  hooks: { reload?: () => void } = {},
+): void => {
   if (!outcome.ok) {
     if (outcome.error instanceof AuthError) {
       setScreen('login');
+      return;
+    }
+    if (outcome.error instanceof AccountMismatchError) {
+      // The list belongs to another account (signed in from another tab): nothing was
+      // reconciled or written. Drop this account's data and re-hydrate as the new one.
+      const reloaded = reloadForAccountChange(hooks.reload);
+      render();
+      if (!reloaded) {
+        showToast('The signed-in Discord account changed. Reload the page to continue.', { variant: 'error' });
+      }
       return;
     }
     state.guildListError = true;
@@ -19,6 +33,7 @@ export const applyGuildSyncOutcome = (outcome: GuildSyncOutcome): void => {
     showToast('Unable to load servers', { variant: 'error' });
     return;
   }
+  clearAccountReloadGuard();
   state.guilds = outcome.guilds;
   state.guildListLoaded = true;
   state.guildListError = false;
