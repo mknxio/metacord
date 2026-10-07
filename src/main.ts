@@ -29,7 +29,8 @@ import {
   watchPersistedUserData,
   type UserDataStore,
 } from './lib/storage';
-import { activateAccount, reloadForAccountChange, watchAccountSwitch } from './lib/account';
+import { activateAccount, watchAccountSwitch } from './lib/account';
+import { handleAccountChanged } from './lib/account-view';
 import { setupEvents } from './lib/events';
 
 // --- Error boundary ---
@@ -198,10 +199,7 @@ try {
     hydrateDemo();
   } else {
     // Another tab signed in as a different account: this tab's requests now act for it.
-    watchAccountSwitch(() => {
-      reloadForAccountChange();
-      render();
-    });
+    watchAccountSwitch(() => handleAccountChanged());
     void hydrateApp();
   }
 } catch (error) {

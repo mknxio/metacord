@@ -51,6 +51,10 @@ export const renderUnsupportedDataNotice = (
   if (entries.length === 0) return;
 
   const rerender = () => renderUnsupportedDataNotice(container, options, hooks);
+  // `options` is the page's live storage options: if the account changed or signed out
+  // since this render, the buttons below must not act on the payloads they captured.
+  const renderedKey = options.storageKey;
+  const stillActive = (): boolean => options.storageKey === renderedKey;
   const blocked = isUserDataWriteBlocked(options);
   const release = (payloads: string[], discard: boolean) => {
     const wasBlocked = isUserDataWriteBlocked(options);
@@ -96,6 +100,7 @@ export const renderUnsupportedDataNotice = (
     const button = createElement('button', 'btn btn-secondary btn-sm', label);
     button.type = 'button';
     button.addEventListener('click', () => {
+      if (!stillActive()) return;
       downloadBackup(entry, `user_data_v${entry.version ?? 'unknown'}_preserved${suffix}.json`);
       if (held.includes(entry)) {
         // The download is now the user's copy of this payload (and only this one).
@@ -108,6 +113,7 @@ export const renderUnsupportedDataNotice = (
   const discard = createElement('button', 'btn btn-ghost btn-sm', 'Discard preserved data');
   discard.type = 'button';
   discard.addEventListener('click', () => {
+    if (!stillActive()) return;
     const confirmed = confirm(
       'Discard the preserved data from the newer Metacord version? Download it first if you might need it. This cannot be undone.',
     );

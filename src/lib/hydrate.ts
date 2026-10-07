@@ -1,5 +1,6 @@
 import { AccountMismatchError, AuthError } from './api';
-import { clearAccountReloadGuard, reloadForAccountChange } from './account';
+import { clearAccountReloadGuard } from './account';
+import { handleAccountChanged } from './account-view';
 import type { GuildSyncOutcome } from './guild-sync';
 import { render, setScreen, showToast } from './render';
 import { state } from './state';
@@ -20,12 +21,8 @@ export const applyGuildSyncOutcome = (
     }
     if (outcome.error instanceof AccountMismatchError) {
       // The list belongs to another account (signed in from another tab): nothing was
-      // reconciled or written. Drop this account's data and re-hydrate as the new one.
-      const reloaded = reloadForAccountChange(hooks.reload);
-      render();
-      if (!reloaded) {
-        showToast('The signed-in Discord account changed. Reload the page to continue.', { variant: 'error' });
-      }
+      // reconciled or written. Drop this account's view and re-hydrate as the new one.
+      handleAccountChanged(hooks.reload);
       return;
     }
     state.guildListError = true;

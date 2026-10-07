@@ -19,6 +19,7 @@ vi.hoisted(() => {
 import { AccountMismatchError, fetchGuildMember, fetchGuilds, type ApiGuild } from '../api';
 import { activateAccount, deactivateAccount, watchAccountSwitch } from '../account';
 import { syncGuildList } from '../guild-sync';
+import { ACCOUNT_CHANGED_MESSAGE } from '../account-view';
 import { applyGuildSyncOutcome } from '../hydrate';
 import { initShowToast, setScreen } from '../render';
 import { state, storageOptions } from '../state';
@@ -122,9 +123,8 @@ describe('a guild list for a different account', () => {
       reload,
     });
     expect(reload).toHaveBeenCalledTimes(1);
-    expect(toast.show).toHaveBeenCalledWith('The signed-in Discord account changed. Reload the page to continue.', {
-      variant: 'error',
-    });
+    expect(document.getElementById('login-status')?.textContent).toBe(ACCOUNT_CHANGED_MESSAGE);
+    expect(document.getElementById('app-shell')?.classList.contains('hidden')).toBe(true);
   });
 
   it('may reload again after a clean load', async () => {

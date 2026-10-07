@@ -40,21 +40,17 @@ export const watchAccountSwitch = (onSwitched: () => void): (() => void) => {
 };
 
 /**
- * Drops this account's data and reloads so the page re-hydrates as whichever account the
- * session now belongs to. Reloads at most once per tab until a guild list loads cleanly
- * again (see clearAccountReloadGuard), so a persistent mismatch cannot loop; returns false
- * when it did not reload.
+ * Claims this tab's one reload for an account change. Allowed once per tab until a guild list
+ * loads cleanly again (see clearAccountReloadGuard), so a persistent mismatch cannot loop.
  */
-export const reloadForAccountChange = (reload: () => void = () => window.location.reload()): boolean => {
-  deactivateAccount();
+export const claimAccountReload = (): boolean => {
   try {
     if (sessionStorage.getItem(ACCOUNT_RELOAD_GUARD_KEY)) return false;
     sessionStorage.setItem(ACCOUNT_RELOAD_GUARD_KEY, '1');
+    return true;
   } catch {
     return false;
   }
-  reload();
-  return true;
 };
 
 export const clearAccountReloadGuard = (): void => {
