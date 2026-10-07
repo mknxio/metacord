@@ -133,13 +133,6 @@ app.get('/api/auth/callback', async (c) => {
 
   const user: DiscordUser = await userResponse.json();
 
-  // This sign-in replaces any session the browser already had (possibly another account's).
-  // Revoke it so a delayed response renewing the old cookie cannot switch the browser back.
-  const previousSessionId = cookies[getSessionCookieName(secure)];
-  if (previousSessionId) {
-    await revokeSession(previousSessionId, c.env);
-  }
-
   const sessionId = crypto.randomUUID();
   const now = Date.now();
 
@@ -154,6 +147,14 @@ app.get('/api/auth/callback', async (c) => {
     },
     c.env
   );
+
+  // This sign-in replaces any session the browser already had (possibly another account's).
+  // Revoke it so a delayed response renewing the old cookie cannot switch the browser back,
+  // but only now that the new session is stored: if that write failed, the old one survives.
+  const previousSessionId = cookies[getSessionCookieName(secure)];
+  if (previousSessionId && previousSessionId !== sessionId) {
+    await revokeSession(previousSessionId, c.env);
+  }
 
   const headers = new Headers();
   headers.set('Location', '/');

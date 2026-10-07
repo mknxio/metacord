@@ -138,6 +138,36 @@ describe('sign-in and logout', () => {
     );
   });
 
+  it('keeps the previous session usable when storing the new one fails', async () => {
+    await persistSession('session-a', sessionFor('A'), env);
+    const kv = env.SESSIONS;
+    const put = kv.put.bind(kv);
+    vi.spyOn(kv, 'put').mockImplementation((async (key: string, value: string, options?: KVNamespacePutOptions) => {
+      if (key !== 'session-a' && !key.startsWith('revoked:')) throw new Error('KV write failed');
+      return put(key, value, options);
+    }) as KVNamespace['put']);
+
+    const response = await callback('session=session-a; ');
+    expect(response.status).toBeGreaterThanOrEqual(500);
+    expect(newSessionId(response)).toBeUndefined();
+    expect(await isSessionRevoked('session-a', env)).toBe(false);
+    expect((await getSessionContext(requestWithCookie('/api/me', 'session=session-a'), env)).session?.userId).toBe('A');
+  });
+
+  it('revokes the previous session only after the new one is stored', async () => {
+    await persistSession('session-a', sessionFor('A'), env);
+    const kv = env.SESSIONS;
+    const writes: string[] = [];
+    const put = kv.put.bind(kv);
+    vi.spyOn(kv, 'put').mockImplementation((async (key: string, value: string, options?: KVNamespacePutOptions) => {
+      writes.push(key);
+      return put(key, value, options);
+    }) as KVNamespace['put']);
+
+    const sessionB = newSessionId(await callback('session=session-a; ')) as string;
+    expect(writes).toEqual([sessionB, 'revoked:session-a']);
+  });
+
   it('signs in normally without a previous session', async () => {
     const response = await callback('');
     expect(response.status).toBe(302);
