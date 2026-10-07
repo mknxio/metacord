@@ -28,6 +28,8 @@ Favorites, names, notes, organization, and other personal context remain user-co
 
 Because the upstream API exposes only current memberships, departed-server history is derived on the client: each complete, successful membership load updates per-server snapshots in this user-owned data, and a server absent from such a load is marked departed. Failed or partial loads never change departure state. Departure is non-destructive; only an explicit, confirmed forget removes a server's snapshot and annotations. Membership facts and rejoin invites can only be captured while the user is still a member, so they are recorded by explicit user action.
 
+Personal data is isolated per upstream account. Each signed-in account's data is stored separately, keyed by its stable account identifier, and the client reads and writes only the signed-in account's data. Nothing is loaded before identity is known, and signing out clears it from memory while it stays at rest for that account. Membership data is applied only to the account it was issued for: the API identifies the account with each membership list, and the client refuses a list for any other account (for example after another tab signs in as someone else), without reconciling or writing. Demo data has its own separate store. Data stored by earlier versions under a single shared location could belong to any account, so it is discarded rather than migrated (builder decision 2026-10-07, [#9](https://github.com/mknxio/metacord/issues/9)).
+
 ### Shared request coordination and caching
 
 Shared coordination protects constrained upstream requests from unsafe concurrency and observed throttling. Caching reduces repeated work but does not become the authoritative source of membership or personal state.
@@ -44,7 +46,7 @@ The client requests membership information through the API. The integration boun
 
 ### Personal data portability
 
-Personal annotations are read and written within the user-owned data boundary. Export produces a versioned portable representation; import validates compatibility before replacing or merging supported state and must fail visibly without partial silent loss.
+Personal annotations are read and written within the user-owned data boundary of the signed-in account. Export produces a versioned portable representation; import validates compatibility before replacing or merging supported state, writes only to the signed-in account's data, and must fail visibly without partial silent loss.
 
 #### Opt-in encrypted backup (agreed, not yet implemented)
 
