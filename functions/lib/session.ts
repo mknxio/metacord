@@ -15,11 +15,15 @@ const REVOKED_TTL_SECONDS = SESSION_TTL_SECONDS * 2;
 
 const revokedKey = (sessionId: string): string => `revoked:${sessionId}`;
 
+/**
+ * A refused session never comes with a clearing Set-Cookie: the response may arrive after the
+ * browser already holds a newer cookie (a re-login, or another account), and clearing would
+ * sign that newer session out. A dead cookie only yields 401s until it expires.
+ */
 export interface SessionContext {
   sessionId: string | null;
   session: SessionData | null;
   setCookie?: string;
-  clearCookie?: string;
   secure: boolean;
 }
 
@@ -72,7 +76,7 @@ export async function getSessionContext(request: Request, env: Env): Promise<Ses
   ]);
   if (!record || revoked) {
     // A revoked session stays dead even if a racing renewal rewrote its record.
-    return { sessionId, session: null, clearCookie: buildClearSessionCookie(secure), secure };
+    return { sessionId, session: null, secure };
   }
 
   try {
@@ -90,7 +94,7 @@ export async function getSessionContext(request: Request, env: Env): Promise<Ses
       const refreshed = await refreshSession(sessionId, session, env);
       if (!refreshed) {
         await deleteSession(sessionId, env);
-        return { sessionId, session: null, clearCookie: buildClearSessionCookie(secure), secure };
+        return { sessionId, session: null, secure };
       }
       session = refreshed;
     } else {
@@ -101,7 +105,7 @@ export async function getSessionContext(request: Request, env: Env): Promise<Ses
     // record was read (for example a sign-in as another account): undo it and do not renew.
     if (await isSessionRevoked(sessionId, env)) {
       await deleteSession(sessionId, env);
-      return { sessionId, session: null, clearCookie: buildClearSessionCookie(secure), secure };
+      return { sessionId, session: null, secure };
     }
 
     return {
@@ -112,7 +116,7 @@ export async function getSessionContext(request: Request, env: Env): Promise<Ses
     };
   } catch {
     await deleteSession(sessionId, env);
-    return { sessionId, session: null, clearCookie: buildClearSessionCookie(secure), secure };
+    return { sessionId, session: null, secure };
   }
 }
 

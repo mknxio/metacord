@@ -42,7 +42,7 @@ describe('getSessionContext', () => {
     expect(context.setCookie).toContain('session=session-a');
   });
 
-  it('refuses a revoked session: no renewal, a clear cookie, even if its record was rewritten', async () => {
+  it('refuses a revoked session without any Set-Cookie, even if its record was rewritten', async () => {
     await persistSession('session-a', sessionFor('A'), env);
     await revokeSession('session-a', env);
     // A renewal that read the record before revocation rewrites it afterwards.
@@ -52,7 +52,6 @@ describe('getSessionContext', () => {
     const context = await getSessionContext(requestWithCookie('/api/me', 'session=session-a'), env);
     expect(context.session).toBeNull();
     expect(context.setCookie).toBeUndefined();
-    expect(context.clearCookie).toContain('Max-Age=0');
     // Refused before any rolling write, so the revoked record is not renewed even briefly.
     expect(put).not.toHaveBeenCalled();
   });
@@ -122,9 +121,21 @@ describe('sign-in and logout', () => {
     const reverted = await getSessionContext(requestWithCookie('/api/me', 'session=session-a'), env);
     expect(reverted.session).toBeNull();
     expect(reverted.setCookie).toBeUndefined();
-    expect(reverted.clearCookie).toBeDefined();
     const signedIn = await getSessionContext(requestWithCookie('/api/me', `session=${sessionB}`), env);
     expect(signedIn.session?.userId).toBe('B');
+  });
+
+  it('lets a late request with the old cookie fail without clearing a same-account re-login', async () => {
+    await persistSession('session-a', sessionFor('B'), env);
+    const relogin = await callback('session=session-a; ');
+    const sessionB = newSessionId(relogin) as string;
+
+    const late = await app.request(`${ORIGIN}/api/guilds`, { headers: { Cookie: 'session=session-a' } }, env);
+    expect(late.status).toBe(401);
+    expect(late.headers.getSetCookie()).toEqual([]);
+    expect((await getSessionContext(requestWithCookie('/api/me', `session=${sessionB}`), env)).session?.userId).toBe(
+      'B',
+    );
   });
 
   it('signs in normally without a previous session', async () => {
@@ -149,5 +160,30 @@ describe('sign-in and logout', () => {
     expect(await isSessionRevoked('session-a', env)).toBe(true);
     await persistSession('session-a', sessionFor('A'), env);
     expect((await getSessionContext(requestWithCookie('/api/me', 'session=session-a'), env)).session).toBeNull();
+  });
+});
+
+describe('refusals never clear the cookie', () => {
+  it('answers an unknown session with 401 and no Set-Cookie', async () => {
+    const response = await app.request(`${ORIGIN}/api/guilds`, { headers: { Cookie: 'session=unknown' } }, env);
+    expect(response.status).toBe(401);
+    expect(response.headers.getSetCookie()).toEqual([]);
+  });
+
+  it('ends a session whose token refresh fails, without clearing the cookie', async () => {
+    await persistSession('session-a', sessionFor('A'), env);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      return url.includes('/oauth2/token') ? new Response('bad', { status: 400 }) : new Response('no', { status: 401 });
+    });
+    const response = await app.request(
+      `${ORIGIN}/api/guilds`,
+      { headers: { Cookie: 'session=session-a' } },
+      env,
+      { waitUntil: () => {}, passThroughOnException: () => {} } as unknown as ExecutionContext,
+    );
+    expect(response.status).toBe(401);
+    expect(response.headers.getSetCookie()).toEqual([]);
+    expect(await env.SESSIONS.get('session-a')).toBeNull();
   });
 });

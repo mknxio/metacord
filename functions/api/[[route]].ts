@@ -17,6 +17,7 @@ import { errorResponse, jsonResponse } from '../lib/http';
 import {
   buildClearSessionCookie,
   buildSessionCookie,
+  deleteSession,
   getSessionCookieName,
   getSessionContext,
   isSecureContext,
@@ -202,14 +203,9 @@ app.get('/api/me', async (c) => {
     c.env
   );
 
-  if (!result.session) {
-    headers.append('Set-Cookie', buildClearSessionCookie(sessionContext.secure));
-    return jsonResponse({ authenticated: false, reason: 'invalid_token' }, 200, headers);
-  }
-
-  if (result.response.status === 401) {
-    headers.append('Set-Cookie', buildClearSessionCookie(sessionContext.secure));
-    return jsonResponse({ authenticated: false, reason: 'invalid_token' }, 200, headers);
+  // No clearing cookie on refusal (see SessionContext): the session is deleted server-side.
+  if (!result.session || result.response.status === 401) {
+    return jsonResponse({ authenticated: false, reason: 'invalid_token' }, 200);
   }
 
   if (!result.response.ok) {
@@ -254,16 +250,9 @@ app.get('/api/guilds', async (c) => {
     c.env
   );
 
-  if (!result.session) {
-    const headers = new Headers();
-    headers.append('Set-Cookie', buildClearSessionCookie(sessionContext.secure));
-    return errorResponse('Unauthorized', 401, headers);
-  }
-
-  if (result.response.status === 401) {
-    const headers = new Headers();
-    headers.append('Set-Cookie', buildClearSessionCookie(sessionContext.secure));
-    return errorResponse('Unauthorized', 401, headers);
+  // No clearing cookie on refusal (see SessionContext): the session is deleted server-side.
+  if (!result.session || result.response.status === 401) {
+    return errorResponse('Unauthorized', 401);
   }
 
   if (!result.response.ok) {
@@ -308,16 +297,9 @@ app.get('/api/guilds/:id', async (c) => {
     c.env
   );
 
-  if (!result.session) {
-    const headers = new Headers();
-    headers.append('Set-Cookie', buildClearSessionCookie(sessionContext.secure));
-    return errorResponse('Unauthorized', 401, headers);
-  }
-
-  if (result.response.status === 401) {
-    const headers = new Headers();
-    headers.append('Set-Cookie', buildClearSessionCookie(sessionContext.secure));
-    return errorResponse('Unauthorized', 401, headers);
+  // No clearing cookie on refusal (see SessionContext): the session is deleted server-side.
+  if (!result.session || result.response.status === 401) {
+    return errorResponse('Unauthorized', 401);
   }
 
   if (!result.response.ok) {
@@ -472,9 +454,6 @@ function applySessionHeaders(headers: Headers, sessionContext: Awaited<ReturnTyp
   if (sessionContext.setCookie) {
     headers.append('Set-Cookie', sessionContext.setCookie);
   }
-  if (sessionContext.clearCookie) {
-    headers.append('Set-Cookie', sessionContext.clearCookie);
-  }
 }
 
 async function fetchDiscordWithRefresh(
@@ -503,6 +482,8 @@ async function fetchDiscordWithRefresh(
   );
 
   if (!refreshed) {
+    // The session can no longer reach Discord: end it here instead of clearing the cookie.
+    await deleteSession(sessionContext.sessionId, env);
     return { response, session: null };
   }
 
