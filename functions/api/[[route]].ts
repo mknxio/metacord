@@ -17,12 +17,12 @@ import { errorResponse, jsonResponse } from '../lib/http';
 import {
   buildClearSessionCookie,
   buildSessionCookie,
-  deleteSession,
   getSessionCookieName,
   getSessionContext,
   isSecureContext,
   persistSession,
   refreshSession,
+  revokeSession,
 } from '../lib/session';
 import {
   DiscordGuild,
@@ -131,6 +131,14 @@ app.get('/api/auth/callback', async (c) => {
   }
 
   const user: DiscordUser = await userResponse.json();
+
+  // This sign-in replaces any session the browser already had (possibly another account's).
+  // Revoke it so a delayed response renewing the old cookie cannot switch the browser back.
+  const previousSessionId = cookies[getSessionCookieName(secure)];
+  if (previousSessionId) {
+    await revokeSession(previousSessionId, c.env);
+  }
+
   const sessionId = crypto.randomUUID();
   const now = Date.now();
 
@@ -162,7 +170,7 @@ const logoutHandler = async (c: AppContext) => {
   const cookies = parseCookies(c.req.header('Cookie') ?? null);
   const sessionId = cookies[getSessionCookieName(secure)];
   if (sessionId) {
-    await deleteSession(sessionId, c.env);
+    await revokeSession(sessionId, c.env);
   }
 
   const headers = new Headers();

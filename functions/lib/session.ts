@@ -7,6 +7,13 @@ const SESSION_COOKIE_NAME_INSECURE = 'session';
 const SESSION_TTL_SECONDS = 60 * 30;
 const REFRESH_WINDOW_MS = 5 * 60 * 1000;
 const DISCORD_TOKEN_URL = 'https://discord.com/api/oauth2/token';
+/**
+ * Revocation tombstones outlive any record a racing renewal could rewrite: such a write
+ * lands at most one request's duration after revocation and expires SESSION_TTL later.
+ */
+const REVOKED_TTL_SECONDS = SESSION_TTL_SECONDS * 2;
+
+const revokedKey = (sessionId: string): string => `revoked:${sessionId}`;
 
 export interface SessionContext {
   sessionId: string | null;
@@ -59,8 +66,12 @@ export async function getSessionContext(request: Request, env: Env): Promise<Ses
     return { sessionId: null, session: null, secure };
   }
 
-  const record = await env.SESSIONS.get<SessionRecord>(sessionId, 'json');
-  if (!record) {
+  const [record, revoked] = await Promise.all([
+    env.SESSIONS.get<SessionRecord>(sessionId, 'json'),
+    isSessionRevoked(sessionId, env),
+  ]);
+  if (!record || revoked) {
+    // A revoked session stays dead even if a racing renewal rewrote its record.
     return { sessionId, session: null, clearCookie: buildClearSessionCookie(secure), secure };
   }
 
@@ -84,6 +95,13 @@ export async function getSessionContext(request: Request, env: Env): Promise<Ses
       session = refreshed;
     } else {
       await persistSession(sessionId, session, env);
+    }
+
+    // The rolling write above may have landed after a revocation that happened once the
+    // record was read (for example a sign-in as another account): undo it and do not renew.
+    if (await isSessionRevoked(sessionId, env)) {
+      await deleteSession(sessionId, env);
+      return { sessionId, session: null, clearCookie: buildClearSessionCookie(secure), secure };
     }
 
     return {
@@ -117,6 +135,26 @@ export async function persistSession(
 
 export async function deleteSession(sessionId: string, env: Env): Promise<void> {
   await env.SESSIONS.delete(sessionId);
+}
+
+export async function isSessionRevoked(sessionId: string, env: Env): Promise<boolean> {
+  return (await env.SESSIONS.get(revokedKey(sessionId))) !== null;
+}
+
+/**
+ * Ends a session for good (logout, or a sign-in that replaces it): writes a tombstone, then
+ * deletes the record and its encrypted tokens. getSessionContext refuses tombstoned sessions
+ * and re-checks after its rolling write, so a request still in flight with the old cookie
+ * cannot renew it or set that cookie again on a later request.
+ *
+ * Limit: Workers KV is eventually consistent across locations (a write can take up to about
+ * 60 seconds to be visible elsewhere), so a request served by another location within that
+ * window may still read the old record and miss the tombstone. Revocation is reliable within
+ * a location and converges everywhere after propagation; it is not instantaneous globally.
+ */
+export async function revokeSession(sessionId: string, env: Env): Promise<void> {
+  await env.SESSIONS.put(revokedKey(sessionId), '1', { expirationTtl: REVOKED_TTL_SECONDS });
+  await deleteSession(sessionId, env);
 }
 
 export async function refreshSession(
