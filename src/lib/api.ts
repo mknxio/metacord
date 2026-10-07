@@ -15,7 +15,7 @@ export interface ApiGuildMember {
   avatar?: string | null;
 }
 
-/** Widget data returned by the /api/widget/:id endpoint */
+/** Public widget data for a guild; both fields are null when the widget is disabled */
 export type ApiWidget = WidgetData;
 
 export class AuthError extends Error {
@@ -91,8 +91,67 @@ export function fetchGuildMember(guildId: string): Promise<ApiGuildMember> {
   return apiRequest<ApiGuildMember>(`/api/guilds/${guildId}`);
 }
 
-export function fetchWidget(guildId: string): Promise<ApiWidget> {
-  return apiRequest<ApiWidget>(`/api/widget/${guildId}`);
+const DISCORD_WIDGET_BASE = 'https://discord.com/api/v10/guilds';
+const GUILD_ID_PATTERN = /^\d{17,20}$/;
+const DISABLED_WIDGET: ApiWidget = { instant_invite: null, presence_count: null };
+
+interface DiscordWidgetResponse {
+  instant_invite?: unknown;
+  presence_count?: unknown;
+}
+
+const parseRetryAfter = async (response: Response): Promise<number | null> => {
+  try {
+    const body = (await response.json()) as { retry_after?: unknown };
+    if (typeof body.retry_after === 'number' && Number.isFinite(body.retry_after) && body.retry_after >= 0) {
+      return Math.ceil(body.retry_after);
+    }
+  } catch {
+    // Fall back to the header when the body is missing or not JSON.
+  }
+  // Discord does not CORS-expose Retry-After, so browsers read null here today; the body's
+  // retry_after is the operative source, and the orchestrator applies a default backoff.
+  const header = response.headers.get('Retry-After');
+  const seconds = header ? Number.parseInt(header, 10) : Number.NaN;
+  return Number.isFinite(seconds) && seconds >= 0 ? seconds : null;
+};
+
+/**
+ * Fetch a guild's public widget directly from Discord.
+ *
+ * The widget endpoint is public and credential-free, and Discord limits unauthenticated
+ * requests per client IP, so calling it from the browser keeps each user on their own
+ * limits instead of sharing the Worker's egress IP. The request carries no credentials
+ * and no non-safelisted headers, so it never triggers a CORS preflight.
+ */
+export async function fetchWidget(guildId: string): Promise<ApiWidget> {
+  if (!GUILD_ID_PATTERN.test(guildId)) {
+    throw new Error('Invalid guild ID format');
+  }
+
+  const response = await fetch(`${DISCORD_WIDGET_BASE}/${guildId}/widget.json`, {
+    method: 'GET',
+    credentials: 'omit',
+  });
+
+  // Discord returns 403 for a disabled widget and 404 for an unknown guild.
+  if (response.status === 403 || response.status === 404) {
+    return { ...DISABLED_WIDGET };
+  }
+
+  if (response.status === 429) {
+    throw new RateLimitError(await parseRetryAfter(response));
+  }
+
+  if (!response.ok) {
+    throw new Error(`Widget request failed: ${response.status}`);
+  }
+
+  const widget = (await response.json()) as DiscordWidgetResponse;
+  return {
+    instant_invite: typeof widget.instant_invite === 'string' ? widget.instant_invite : null,
+    presence_count: typeof widget.presence_count === 'number' ? widget.presence_count : null,
+  };
 }
 
 export async function logout(): Promise<void> {

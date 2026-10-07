@@ -10,7 +10,6 @@ export const COLLAPSED_SECTIONS_KEY = 'discord_manager_collapsed_sections';
 export const SORT_PREFERENCE_KEY = 'discord_manager_sort_preference';
 export const DEMO_GUILDS_KEY = 'discord_manager_demo_guilds';
 export const DEMO_STORAGE_KEY = 'discord_manager_demo_user_data';
-export const FETCH_COOLDOWN_MS = 60 * 60 * 1000; // 1 hour
 
 export const filterTooltipCopy: Partial<Record<FilterKey, string>> = {
   owned: 'Servers you administer',

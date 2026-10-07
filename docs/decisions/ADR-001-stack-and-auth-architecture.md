@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (2026-01-19)
+Accepted (2026-01-19). Amended 2026-10-06: the `/api/widget/:id` proxy was removed; the browser fetches public widget data directly from Discord (issue #10, see ADR-002).
 
 ## Context
 
@@ -40,7 +40,8 @@ We needed to decide on tooling, session management, API caching strategy, and de
 |----------|-----|-----|------------|
 | `/api/guilds` | 600s | 300s | private |
 | `/api/guilds/:id` | 45s | 60s | private |
-| `/api/widget/:id` | 60s | 120s | public |
+
+The `/api/widget/:id` proxy (60s TTL, 120s SWR, public) was removed on 2026-10-06 (issue #10). Proxied from shared Worker egress IPs, widget requests competed for Discord's per-IP limits for unauthenticated requests. The browser now calls Discord's public, credential-free widget endpoint directly, with no Worker-side cache.
 
 ### Storage Scope
 
@@ -52,7 +53,7 @@ We needed to decide on tooling, session management, API caching strategy, and de
 ### Positive
 
 - Single platform (Cloudflare) simplifies deployment and billing
-- No CORS issues (assets + Worker same origin)
+- No CORS issues (assets + Worker same origin) for the application API; public widget data is the one cross-origin request (issue #10)
 - Edge-native performance globally
 - Local-first user data respects privacy
 

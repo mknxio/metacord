@@ -4,19 +4,12 @@ import {
   fetchWidget,
 } from './api';
 import {
-  clearWidgetCache,
   updateLastFetchTimestamp,
   updateWidgetCache,
   type WidgetCacheEntry,
 } from './storage';
+import { formatRelativeTime, formatSecondsRemaining } from './utils';
 import {
-  formatCooldownRemaining,
-  formatRelativeTime,
-  formatSecondsRemaining,
-  getCooldownRemaining,
-} from './utils';
-import {
-  FETCH_COOLDOWN_MS,
   getElement,
   isDemoMode,
   state,
@@ -27,13 +20,20 @@ import type { ModalController } from '../components/modal';
 
 export const FETCH_BATCH_SIZE = 5;
 export const FETCH_BATCH_DELAY_MS = 1000;
+/**
+ * Backoff applied when Discord gives no usable retry hint: a 429 without a readable
+ * retry_after, or a whole batch failing at the network layer. In the browser, a response
+ * without CORS headers (for example an edge-level IP ban) surfaces only as a TypeError,
+ * so a fully failed batch is treated as a possible rate limit rather than retried at once.
+ */
+export const FETCH_FALLBACK_BACKOFF_SECONDS = 60;
 
 export const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 export const fetchState = {
   shouldStop: false,
   inProgress: false,
-  cooldownTimerId: undefined as number | undefined,
+  lastRunTimerId: undefined as number | undefined,
   rateLimitTimerId: undefined as number | undefined,
   rateLimitUntil: null as number | null,
 };
@@ -51,11 +51,9 @@ export const updateFetchButtonState = (): void => {
   const fetchTooltipAnchor = getElement<HTMLElement>('fetch-tooltip-anchor');
   const fetchTooltip = getElement<HTMLElement>('fetch-tooltip');
 
-  // Check rate limit first (takes priority)
+  // Rate limit backoff takes priority over the in-progress state
   const isRateLimited = fetchState.rateLimitUntil !== null && fetchState.rateLimitUntil > Date.now();
-  const remaining = getCooldownRemaining(state.userData.lastFetchTimestamp, FETCH_COOLDOWN_MS);
-  const isOnCooldown = remaining > 0;
-  const isDisabled = isRateLimited || isOnCooldown || fetchState.inProgress;
+  const isDisabled = isRateLimited || fetchState.inProgress;
 
   fetchButton.disabled = isDisabled;
   fetchButton.setAttribute('aria-disabled', isDisabled ? 'true' : 'false');
@@ -64,13 +62,6 @@ export const updateFetchButtonState = (): void => {
     const secondsRemaining = Math.ceil((fetchState.rateLimitUntil! - Date.now()) / 1000);
     const formatted = formatSecondsRemaining(secondsRemaining);
     fetchTooltip.textContent = `Rate limited by Discord. Available in ${formatted}.`;
-    fetchTooltip.classList.add('is-cooldown');
-    fetchTooltipAnchor.classList.add('is-tooltip-active');
-    fetchTooltipAnchor.setAttribute('tabindex', '0');
-    fetchTooltip.setAttribute('aria-hidden', 'false');
-  } else if (isOnCooldown) {
-    const formatted = formatCooldownRemaining(remaining);
-    fetchTooltip.textContent = `Cooldown active. Available in ${formatted}.`;
     fetchTooltip.classList.add('is-cooldown');
     fetchTooltipAnchor.classList.add('is-tooltip-active');
     fetchTooltipAnchor.setAttribute('tabindex', '0');
@@ -106,25 +97,18 @@ export const updateFetchLastRunDisplay = (): void => {
   }
 };
 
-export const stopCooldownTimer = (): void => {
-  if (fetchState.cooldownTimerId !== undefined) {
-    window.clearInterval(fetchState.cooldownTimerId);
-    fetchState.cooldownTimerId = undefined;
+export const stopLastRunTimer = (): void => {
+  if (fetchState.lastRunTimerId !== undefined) {
+    window.clearInterval(fetchState.lastRunTimerId);
+    fetchState.lastRunTimerId = undefined;
   }
 };
 
-export const startCooldownTimer = (): void => {
-  stopCooldownTimer();
-  const tick = (): void => {
-    updateFetchButtonState();
-    updateFetchLastRunDisplay();
-    const remaining = getCooldownRemaining(state.userData.lastFetchTimestamp, FETCH_COOLDOWN_MS);
-    if (remaining <= 0) {
-      stopCooldownTimer();
-    }
-  };
-  tick();
-  fetchState.cooldownTimerId = window.setInterval(tick, 60000); // Update every minute
+/** Keep the relative "Last fetched" label current while the app is open. */
+export const startLastRunTimer = (): void => {
+  stopLastRunTimer();
+  updateFetchLastRunDisplay();
+  fetchState.lastRunTimerId = window.setInterval(updateFetchLastRunDisplay, 60000); // Update every minute
 };
 
 export const stopRateLimitTimer = (): void => {
@@ -155,7 +139,7 @@ export const updateFetchSkipInfo = (): void => {
   const fetchForce = getElement<HTMLInputElement>('fetch-force');
 
   if (fetchForce.checked) {
-    fetchSkipInfo.textContent = 'All cached results will be cleared before fetching.';
+    fetchSkipInfo.textContent = 'All servers will be refetched. Cached results are replaced as new data arrives.';
     return;
   }
   const cachedCount = Object.keys(state.userData.widgetCache).length;
@@ -190,11 +174,9 @@ export const performWidgetFetch = async (): Promise<void> => {
   fetchInlineText.textContent = 'Fetching...';
   fetchInlineDetail.textContent = '';
 
+  // A forced run refetches every server but replaces cache entries only on success,
+  // so a run that fails or is rate limited keeps the previously cached data.
   const force = fetchForce.checked;
-  if (force) {
-    state.userData = clearWidgetCache(state.userData, storageOptions);
-  }
-
   const serverIds = state.guilds.map((guild) => guild.id);
   const targets = force
     ? serverIds
@@ -223,6 +205,22 @@ export const performWidgetFetch = async (): Promise<void> => {
         return { guildId, widget };
       })
     );
+
+    // fetch() rejects with a TypeError for network, CORS, and CSP failures.
+    const allNetworkFailures = results.every(
+      (result) => result.status === 'rejected' && result.reason instanceof TypeError
+    );
+    if (allNetworkFailures) {
+      rateLimited = true;
+      fetchInlineBar.classList.add('is-stopped');
+      startRateLimitTimer(FETCH_FALLBACK_BACKOFF_SECONDS);
+      const formatted = formatSecondsRemaining(FETCH_FALLBACK_BACKOFF_SECONDS);
+      showToast(
+        `Could not reach Discord. Requests may be rate limited or blocked. Try again in ${formatted}.`,
+        { variant: 'error' }
+      );
+      return;
+    }
 
     for (const result of results) {
       if (fetchState.shouldStop || rateLimited) break;
@@ -254,14 +252,13 @@ export const performWidgetFetch = async (): Promise<void> => {
         if (error instanceof RateLimitError) {
           rateLimited = true;
           fetchInlineBar.classList.add('is-stopped');
-          // Start rate limit timer if we have a retry-after value
-          if (error.retryAfter !== null && error.retryAfter > 0) {
-            startRateLimitTimer(error.retryAfter);
-            const formatted = formatSecondsRemaining(error.retryAfter);
-            showToast(`Rate limited by Discord. Available in ${formatted}.`, { variant: 'error' });
-          } else {
-            showToast('Rate limited by Discord. Try again later.', { variant: 'error' });
-          }
+          const retryAfter =
+            error.retryAfter !== null && error.retryAfter > 0
+              ? error.retryAfter
+              : FETCH_FALLBACK_BACKOFF_SECONDS;
+          startRateLimitTimer(retryAfter);
+          const formatted = formatSecondsRemaining(retryAfter);
+          showToast(`Rate limited by Discord. Available in ${formatted}.`, { variant: 'error' });
           return;
         }
         errors += 1;
@@ -298,7 +295,6 @@ export const performWidgetFetch = async (): Promise<void> => {
   // Update timestamp if any successful responses
   if (anySuccess) {
     state.userData = updateLastFetchTimestamp(state.userData, new Date().toISOString(), storageOptions);
-    startCooldownTimer();
   }
 
   updateFetchButtonState();

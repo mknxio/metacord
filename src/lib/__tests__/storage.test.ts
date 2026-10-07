@@ -6,7 +6,6 @@ import {
   updateNickname,
   updateNotes,
   updateWidgetCache,
-  clearWidgetCache,
   updateLastFetchTimestamp,
   exportUserData,
   importUserData,
@@ -389,40 +388,6 @@ describe('updateWidgetCache', () => {
     updateWidgetCache(data, 'guild1', entry, opts);
     const loaded = loadUserData(opts);
     expect(loaded.widgetCache.guild1).toEqual(entry);
-  });
-});
-
-describe('clearWidgetCache', () => {
-  it('clears all widget cache data', () => {
-    const data = createDefaultUserData();
-    data.widgetCache = {
-      guild1: { instantInvite: null, presenceCount: 10, lastCached: null },
-      guild2: { instantInvite: null, presenceCount: 20, lastCached: null },
-    };
-    const result = clearWidgetCache(data, opts);
-    expect(result.widgetCache).toEqual({});
-  });
-
-  it('does not affect other fields', () => {
-    const data = createDefaultUserData();
-    data.favorites = ['guild1'];
-    data.widgetCache = {
-      guild1: { instantInvite: null, presenceCount: 10, lastCached: null },
-    };
-    const result = clearWidgetCache(data, opts);
-    expect(result.favorites).toEqual(['guild1']);
-    expect(result.widgetCache).toEqual({});
-  });
-
-  it('persists changes to localStorage', () => {
-    const data = createDefaultUserData();
-    data.widgetCache = {
-      guild1: { instantInvite: null, presenceCount: 10, lastCached: null },
-    };
-    saveUserData(data, opts);
-    clearWidgetCache(data, opts);
-    const loaded = loadUserData(opts);
-    expect(loaded.widgetCache).toEqual({});
   });
 });
 

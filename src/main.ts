@@ -3,7 +3,7 @@ import { createModalController } from './components/modal';
 import { createToastManager } from './components/toast';
 import { getElement, isDemoMode, state } from './lib/state';
 import { initDetailsModal, initSetScreen, initShowToast, render, setScreen, showToast } from './lib/render';
-import { fetchState, initFetchOrchestrator, stopCooldownTimer, stopRateLimitTimer } from './lib/fetch-orchestrator';
+import { fetchState, initFetchOrchestrator, stopLastRunTimer, stopRateLimitTimer } from './lib/fetch-orchestrator';
 import { hydrateDemo, setupDemoMode } from './lib/demo';
 import { setupEvents } from './lib/events';
 
@@ -85,7 +85,7 @@ function closeAppOverlays(): void {
   fetchState.shouldStop = true;
   fetchState.inProgress = false;
   getElement<HTMLElement>('fetch-progress-inline').classList.add('hidden');
-  stopCooldownTimer();
+  stopLastRunTimer();
   stopRateLimitTimer();
   importModal.close();
   fetchModal.close();

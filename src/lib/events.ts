@@ -29,9 +29,8 @@ import { render, setImportStatus, setScreen, showToast, getVisibleServerIds } fr
 import {
   fetchState,
   performWidgetFetch,
-  startCooldownTimer,
+  startLastRunTimer,
   updateFetchButtonState,
-  updateFetchLastRunDisplay,
   updateFetchSkipInfo,
 } from './fetch-orchestrator';
 import {
@@ -408,10 +407,9 @@ export const setupEvents = (options: SetupEventsOptions): void => {
       updateFetchSkipInfo();
       fetchModal.open();
     });
-    // Initialize cooldown state
+    // Initialize fetch button and "Last fetched" state
     updateFetchButtonState();
-    updateFetchLastRunDisplay();
-    startCooldownTimer();
+    startLastRunTimer();
   } else {
     fetchButton.disabled = true;
     fetchButton.setAttribute('aria-disabled', 'true');

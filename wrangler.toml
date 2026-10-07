@@ -3,25 +3,30 @@ name = "metacord-dev"
 main = "src/worker.ts"
 compatibility_date = "2026-01-21"
 
+# KV Namespaces (dev — overridden in [env.production])
+# Top-level keys must stay above the first table header; TOML assigns keys that
+# follow a header such as [assets] or [[migrations]] to that table.
+kv_namespaces = [
+  { binding = "SESSIONS", id = "9f586389e8db4eea83367ad19c46f749" }
+]
+
 [assets]
 directory = "dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
 run_worker_first = true
 
-# Durable Objects
-[[durable_objects.bindings]]
-name = "DISCORD_RATE_LIMITER"
-class_name = "DiscordRateLimiter"
-
+# Durable Object migrations. `migrations` is inheritable, so [env.production]
+# applies the same history.
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["DiscordRateLimiter"]
 
-# KV Namespaces (dev — overridden in [env.production])
-kv_namespaces = [
-  { binding = "SESSIONS", id = "9f586389e8db4eea83367ad19c46f749" }
-]
+# DiscordRateLimiter coordinated the removed /api/widget proxy (issue #10).
+# Deleting a class permanently deletes its stored data when deployed.
+[[migrations]]
+tag = "v2"
+deleted_classes = ["DiscordRateLimiter"]
 
 # Environment variables (dev — overridden in [env.production])
 # Secrets must be set via `wrangler secret put <NAME>`:
@@ -44,10 +49,6 @@ name = "metacord-prod"
 kv_namespaces = [
   { binding = "SESSIONS", id = "89d6fd289f654bfc802fc9a3eb2e4cd6" }
 ]
-
-[[env.production.durable_objects.bindings]]
-name = "DISCORD_RATE_LIMITER"
-class_name = "DiscordRateLimiter"
 
 [env.production.vars]
 DISCORD_CLIENT_ID = "1463314254664040501"

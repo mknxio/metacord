@@ -45,6 +45,11 @@ Metacord runs as Cloudflare Workers with static assets served from the bundled `
 - **KV namespace binding**: `SESSIONS`
 - **Env vars**: `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `SESSION_SECRET`, `DISCORD_REDIRECT_URI`
 
+### Durable Object migrations
+- No Durable Object bindings remain. `wrangler.toml` keeps the migration history, which both environments inherit: `v1` created `DiscordRateLimiter` and `v2` deletes it.
+- The first deploy of `v2` to each environment permanently deletes the `DiscordRateLimiter` class and its stored state. This cannot be undone, so deploy it only with explicit approval.
+- Validate the configuration without deploying: `pnpm build`, then `pnpm exec wrangler deploy --dry-run --env="" --outdir <tmp>` and `pnpm exec wrangler deploy --dry-run --env production --outdir <tmp>`.
+
 ### Dashboard setup
 - Create two KV namespaces (dev + prod) and fill in the `id` values in `wrangler.toml` for each environment.
 - Add Worker routes or custom domains:

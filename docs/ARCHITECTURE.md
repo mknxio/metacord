@@ -16,7 +16,9 @@ The API brokers authentication, session validation, upstream access, normalizati
 
 ### External Discord integration
 
-One integration boundary owns upstream protocol details, response normalization, error translation, and rate-limit observations. Product code consumes stable internal contracts rather than depending directly on upstream payload shapes.
+One integration boundary owns upstream protocol details, response normalization, error translation, and rate-limit observations for credentialed upstream access. Product code consumes stable internal contracts rather than depending directly on upstream payload shapes.
+
+Public, credential-free upstream data may be requested by the client directly, so upstream throttling applies to each user rather than to shared infrastructure. A single client-side adapter owns those requests and translates their responses, errors, and throttling into the same kind of stable internal contract. It never attaches credentials.
 
 ### Session and secret storage
 
@@ -38,7 +40,7 @@ The client initiates delegated authentication through the application API. The A
 
 ### Membership retrieval
 
-The client requests membership information through the API. The integration boundary retrieves and normalizes upstream data, using coordination and caching where safe, before the client combines it with personal annotations.
+The client requests membership information through the API. The integration boundary retrieves and normalizes upstream data, using coordination and caching where safe, before the client combines it with personal annotations. Public per-server data that needs no credentials is requested by the client-side adapter directly.
 
 ### Personal data portability
 
@@ -76,7 +78,7 @@ Accepted limits:
 
 - Keep identity credentials and upstream authorization server-side; expose only the minimum derived data needed by the client.
 - Keep personal annotations user-owned, portable, schema-versioned, and recoverable without binding them to a hosting vendor.
-- Isolate upstream API access behind one integration boundary; coordinate and cache requests without making cache state the source of truth.
+- Isolate credentialed upstream API access behind one integration boundary, and public credential-free upstream access behind one client-side adapter; coordinate and cache requests without making cache state the source of truth.
 - Contain runtime-, hosting-, storage-, and UI-framework-specific code behind replaceable adapters or entry points.
 - Design failure states explicitly: expired sessions, partial upstream data, throttling, unavailable coordination or storage, and incompatible imports must degrade visibly without silent data loss.
 - Emit enough diagnostics to operate the system while never logging credentials, session secrets, personal notes, or imported private data.

@@ -1,5 +1,3 @@
-import type { DiscordRateLimiter } from './discord-rate-limiter';
-
 export type { DiscordUser, DiscordGuild, DiscordMember } from '../../shared/types';
 
 export interface Env {
@@ -9,7 +7,6 @@ export interface Env {
   SESSION_SECRET: string;
   DEV_ASSETS_URL?: string;
   SESSIONS: KVNamespace;
-  DISCORD_RATE_LIMITER: DurableObjectNamespace<DiscordRateLimiter>;
 }
 
 export interface SessionRecord {
