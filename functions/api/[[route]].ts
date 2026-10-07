@@ -6,7 +6,7 @@ import {
   getCachedResponse,
 } from '../lib/cache';
 import { parseCookies, serializeCookie } from '../lib/cookies';
-import { GUILDS_LIST_PATH, transformGuild } from '../lib/guilds';
+import { buildGuildListBody, buildGuildListCacheKey, GUILDS_LIST_PATH } from '../lib/guilds';
 import { createPkceChallenge, createPkceVerifier } from '../lib/crypto';
 import { errorResponse, jsonResponse } from '../lib/http';
 import {
@@ -231,7 +231,7 @@ app.get('/api/guilds', async (c) => {
     return errorResponse('Unauthorized', 401, headers);
   }
 
-  const cacheKey = buildUserCacheKey(c.req.raw, sessionContext.session.userId);
+  const cacheKey = buildGuildListCacheKey(c.req.raw, sessionContext.session.userId);
   const cached = await getCachedResponse(cacheKey, sessionContext.setCookie);
   if (cached) return cached;
 
@@ -258,12 +258,11 @@ app.get('/api/guilds', async (c) => {
   }
 
   const guilds: DiscordGuild[] = await result.response.json();
-  const transformed = guilds.map(transformGuild);
 
   return cachedJsonResponse(
     c.executionCtx,
     cacheKey,
-    { guilds: transformed },
+    buildGuildListBody(sessionContext.session.userId, guilds),
     {
       ttlSeconds: 600,
       swrSeconds: 300,
