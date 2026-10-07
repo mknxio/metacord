@@ -1,6 +1,5 @@
 import { logout } from './api';
 import {
-  importUserData,
   exportUserData,
   toggleFavorite,
   saveUserData,
@@ -10,8 +9,11 @@ import {
   moveCategory,
 } from './storage';
 import { createElement } from './utils';
+import { importReconciledUserData } from './guild-sync';
+import { invalidateAccountView } from './account-view';
 import type { ModalController } from '../components/modal';
 import {
+  BUILTIN_SECTIONS,
   type FilterKey,
   type SectionKey,
   type SortKey,
@@ -122,7 +124,7 @@ const toggleSectionCollapse = (sectionKey: SectionKey): void => {
 
 const initializeSectionStates = (): void => {
   const sections = getSections();
-  (['favorites', 'owned', 'public', 'private'] as const).forEach((key) => {
+  BUILTIN_SECTIONS.forEach((key) => {
     const section = sections[key];
     if (!section) return;
 
@@ -137,7 +139,13 @@ const handleImport = async (file: File): Promise<boolean> => {
   try {
     const content = await file.text();
     const parsed: unknown = JSON.parse(content);
-    state.userData = importUserData(parsed, storageOptions);
+    // Saves once, after reconciliation; on any failure state and storage keep the old data.
+    state.userData = importReconciledUserData(
+      parsed,
+      state.guildListLoaded ? state.guilds : null,
+      new Date().toISOString(),
+      storageOptions,
+    );
     if (isDemoMode && loginScreen.getAttribute('aria-hidden') === 'false') {
       setDemoUserDataLoaded(true);
       const message = 'User data loaded. Load guilds_api.json to continue.';
@@ -432,7 +440,8 @@ export const setupEvents = (options: SetupEventsOptions): void => {
     } catch (error) {
       console.error(error);
     } finally {
-      setScreen('login');
+      // Drop this account's data and view; the data stays at rest under its own key.
+      invalidateAccountView();
     }
   });
 

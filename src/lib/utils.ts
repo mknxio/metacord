@@ -85,3 +85,38 @@ export const formatSecondsRemaining = (seconds: number): string => {
   if (remainingSeconds === 0) return `${minutes}m`;
   return `${minutes}m ${remainingSeconds}s`;
 };
+
+const INVITE_HOST_PREFIXES: Record<string, string> = {
+  'discord.gg': '/',
+  'discord.com': '/invite/',
+  'discordapp.com': '/invite/',
+};
+
+const INVITE_CODE_PATTERN = /^[A-Za-z0-9-]{2,64}$/;
+
+/**
+ * Validates a Discord invite URL and returns its canonical https form, or null.
+ *
+ * Only https://discord.gg/<code>, https://discord.com/invite/<code>, and
+ * https://discordapp.com/invite/<code> are accepted (a missing scheme is treated as
+ * https). Invite URLs can arrive from imported files, so anything that is not one of
+ * these exact shapes must never be rendered as a link.
+ */
+export const normalizeInviteUrl = (input: string): string | null => {
+  const trimmed = input.trim();
+  if (trimmed.length === 0 || trimmed.length > 200) return null;
+  const candidate = /^[a-z][a-z0-9+.-]*:/i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  let url: URL;
+  try {
+    url = new URL(candidate);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'https:' || url.username || url.password || url.port) return null;
+  const host = url.hostname.toLowerCase();
+  const prefix = INVITE_HOST_PREFIXES[host];
+  if (!prefix || !url.pathname.startsWith(prefix)) return null;
+  const code = url.pathname.slice(prefix.length).replace(/\/$/, '');
+  if (!INVITE_CODE_PATTERN.test(code)) return null;
+  return `https://${host}${prefix}${code}`;
+};

@@ -3,6 +3,7 @@ import {
   RateLimitError,
   fetchWidget,
 } from './api';
+import { currentAccountEpoch, isAccountCurrent } from './account';
 import {
   clearWidgetCache,
   updateLastFetchTimestamp,
@@ -190,6 +191,8 @@ export const performWidgetFetch = async (): Promise<void> => {
   fetchInlineText.textContent = 'Fetching...';
   fetchInlineDetail.textContent = '';
 
+  // Results arriving after an account switch or logout must not reach any account's data.
+  const epoch = currentAccountEpoch();
   const force = fetchForce.checked;
   if (force) {
     state.userData = clearWidgetCache(state.userData, storageOptions);
@@ -225,7 +228,7 @@ export const performWidgetFetch = async (): Promise<void> => {
     );
 
     for (const result of results) {
-      if (fetchState.shouldStop || rateLimited) break;
+      if (fetchState.shouldStop || rateLimited || !isAccountCurrent(epoch)) break;
 
       if (result.status === 'fulfilled') {
         anySuccess = true;
@@ -296,7 +299,7 @@ export const performWidgetFetch = async (): Promise<void> => {
   fetchState.inProgress = false;
 
   // Update timestamp if any successful responses
-  if (anySuccess) {
+  if (anySuccess && isAccountCurrent(epoch)) {
     state.userData = updateLastFetchTimestamp(state.userData, new Date().toISOString(), storageOptions);
     startCooldownTimer();
   }

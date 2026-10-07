@@ -1,22 +1,31 @@
 import { Hono, type Context } from 'hono';
 import {
   buildCacheKey,
-  buildUserCacheKey,
   cachedJsonResponse,
   getCachedResponse,
 } from '../lib/cache';
 import { parseCookies, serializeCookie } from '../lib/cookies';
+import {
+  buildGuildListBody,
+  buildGuildListCacheKey,
+  buildGuildMemberBody,
+  buildGuildMemberCacheKey,
+  GUILDS_LIST_PATH,
+} from '../lib/guilds';
 import { createPkceChallenge, createPkceVerifier } from '../lib/crypto';
 import { errorResponse, jsonResponse } from '../lib/http';
 import {
   buildClearSessionCookie,
   buildSessionCookie,
   deleteSession,
+  fetchWithTimeout,
   getSessionCookieName,
   getSessionContext,
   isSecureContext,
   persistSession,
   refreshSession,
+  revokeSession,
+  withoutRevokedSessionCookies,
 } from '../lib/session';
 import {
   DiscordGuild,
@@ -28,6 +37,16 @@ import {
 } from '../lib/types';
 
 const app = new Hono<{ Bindings: Env }>();
+
+// Never renew a session that was revoked while its request ran (see withoutRevokedSessionCookies).
+app.use('/api/*', async (c, next) => {
+  await next();
+  const response = await withoutRevokedSessionCookies(c.res, c.req.raw, c.env);
+  if (response === c.res) return;
+  // Hono's res setter merges the previous response's Set-Cookie headers back in; reset first.
+  c.res = undefined as unknown as Response;
+  c.res = response;
+});
 
 const DISCORD_OAUTH_URL = 'https://discord.com/api/oauth2/authorize';
 const DISCORD_TOKEN_URL = 'https://discord.com/api/oauth2/token';
@@ -125,6 +144,7 @@ app.get('/api/auth/callback', async (c) => {
   }
 
   const user: DiscordUser = await userResponse.json();
+
   const sessionId = crypto.randomUUID();
   const now = Date.now();
 
@@ -139,6 +159,14 @@ app.get('/api/auth/callback', async (c) => {
     },
     c.env
   );
+
+  // This sign-in replaces any session the browser already had (possibly another account's).
+  // Revoke it so a delayed response renewing the old cookie cannot switch the browser back,
+  // but only now that the new session is stored: if that write failed, the old one survives.
+  const previousSessionId = cookies[getSessionCookieName(secure)];
+  if (previousSessionId && previousSessionId !== sessionId) {
+    await revokeSession(previousSessionId, c.env);
+  }
 
   const headers = new Headers();
   headers.set('Location', '/');
@@ -156,7 +184,7 @@ const logoutHandler = async (c: AppContext) => {
   const cookies = parseCookies(c.req.header('Cookie') ?? null);
   const sessionId = cookies[getSessionCookieName(secure)];
   if (sessionId) {
-    await deleteSession(sessionId, c.env);
+    await revokeSession(sessionId, c.env);
   }
 
   const headers = new Headers();
@@ -188,14 +216,9 @@ app.get('/api/me', async (c) => {
     c.env
   );
 
-  if (!result.session) {
-    headers.append('Set-Cookie', buildClearSessionCookie(sessionContext.secure));
-    return jsonResponse({ authenticated: false, reason: 'invalid_token' }, 200, headers);
-  }
-
-  if (result.response.status === 401) {
-    headers.append('Set-Cookie', buildClearSessionCookie(sessionContext.secure));
-    return jsonResponse({ authenticated: false, reason: 'invalid_token' }, 200, headers);
+  // No clearing cookie on refusal (see SessionContext): the session is deleted server-side.
+  if (!result.session || result.response.status === 401) {
+    return jsonResponse({ authenticated: false, reason: 'invalid_token' }, 200);
   }
 
   if (!result.response.ok) {
@@ -230,26 +253,19 @@ app.get('/api/guilds', async (c) => {
     return errorResponse('Unauthorized', 401, headers);
   }
 
-  const cacheKey = buildUserCacheKey(c.req.raw, sessionContext.session.userId);
+  const cacheKey = buildGuildListCacheKey(c.req.raw, sessionContext.session.userId);
   const cached = await getCachedResponse(cacheKey, sessionContext.setCookie);
   if (cached) return cached;
 
   const result = await fetchDiscordWithRefresh(
-    `${DISCORD_API_BASE}/users/@me/guilds`,
+    `${DISCORD_API_BASE}${GUILDS_LIST_PATH}`,
     sessionContext,
     c.env
   );
 
-  if (!result.session) {
-    const headers = new Headers();
-    headers.append('Set-Cookie', buildClearSessionCookie(sessionContext.secure));
-    return errorResponse('Unauthorized', 401, headers);
-  }
-
-  if (result.response.status === 401) {
-    const headers = new Headers();
-    headers.append('Set-Cookie', buildClearSessionCookie(sessionContext.secure));
-    return errorResponse('Unauthorized', 401, headers);
+  // No clearing cookie on refusal (see SessionContext): the session is deleted server-side.
+  if (!result.session || result.response.status === 401) {
+    return errorResponse('Unauthorized', 401);
   }
 
   if (!result.response.ok) {
@@ -257,22 +273,11 @@ app.get('/api/guilds', async (c) => {
   }
 
   const guilds: DiscordGuild[] = await result.response.json();
-  const transformed = guilds.map((guild) => ({
-    id: guild.id,
-    name: guild.name,
-    icon: guild.icon,
-    banner: guild.banner,
-    owner: guild.owner,
-    features: guild.features,
-    icon_url: guild.icon
-      ? `https://cdn.discordapp.com/icons/${guild.id}/${guild.icon}.${guild.icon.startsWith('a_') ? 'gif' : 'png'}`
-      : null,
-  }));
 
   return cachedJsonResponse(
     c.executionCtx,
     cacheKey,
-    { guilds: transformed },
+    buildGuildListBody(sessionContext.session.userId, guilds),
     {
       ttlSeconds: 600,
       swrSeconds: 300,
@@ -295,7 +300,7 @@ app.get('/api/guilds/:id', async (c) => {
     return errorResponse('Invalid guild ID format', 400);
   }
 
-  const cacheKey = buildUserCacheKey(c.req.raw, sessionContext.session.userId);
+  const cacheKey = buildGuildMemberCacheKey(c.req.raw, sessionContext.session.userId);
   const cached = await getCachedResponse(cacheKey, sessionContext.setCookie);
   if (cached) return cached;
 
@@ -305,16 +310,9 @@ app.get('/api/guilds/:id', async (c) => {
     c.env
   );
 
-  if (!result.session) {
-    const headers = new Headers();
-    headers.append('Set-Cookie', buildClearSessionCookie(sessionContext.secure));
-    return errorResponse('Unauthorized', 401, headers);
-  }
-
-  if (result.response.status === 401) {
-    const headers = new Headers();
-    headers.append('Set-Cookie', buildClearSessionCookie(sessionContext.secure));
-    return errorResponse('Unauthorized', 401, headers);
+  // No clearing cookie on refusal (see SessionContext): the session is deleted server-side.
+  if (!result.session || result.response.status === 401) {
+    return errorResponse('Unauthorized', 401);
   }
 
   if (!result.response.ok) {
@@ -329,13 +327,7 @@ app.get('/api/guilds/:id', async (c) => {
   return cachedJsonResponse(
     c.executionCtx,
     cacheKey,
-    {
-      guild_id: guildId,
-      joined_at: member.joined_at,
-      nickname: member.nick,
-      roles: member.roles,
-      avatar: member.avatar,
-    },
+    buildGuildMemberBody(sessionContext.session.userId, guildId, member),
     {
       ttlSeconds: 45,
       swrSeconds: 60,
@@ -475,9 +467,6 @@ function applySessionHeaders(headers: Headers, sessionContext: Awaited<ReturnTyp
   if (sessionContext.setCookie) {
     headers.append('Set-Cookie', sessionContext.setCookie);
   }
-  if (sessionContext.clearCookie) {
-    headers.append('Set-Cookie', sessionContext.clearCookie);
-  }
 }
 
 async function fetchDiscordWithRefresh(
@@ -489,7 +478,7 @@ async function fetchDiscordWithRefresh(
     return { response: new Response(null, { status: 401 }), session: null };
   }
 
-  let response = await fetch(url, {
+  let response = await fetchWithTimeout(url, {
     headers: {
       Authorization: `Bearer ${sessionContext.session.accessToken}`,
     },
@@ -506,10 +495,12 @@ async function fetchDiscordWithRefresh(
   );
 
   if (!refreshed) {
+    // The session can no longer reach Discord: end it here instead of clearing the cookie.
+    await deleteSession(sessionContext.sessionId, env);
     return { response, session: null };
   }
 
-  response = await fetch(url, {
+  response = await fetchWithTimeout(url, {
     headers: {
       Authorization: `Bearer ${refreshed.accessToken}`,
     },

@@ -8,6 +8,8 @@ export type ApiGuild = DiscordGuild;
 
 /** Member info returned by the /api/guilds/:id endpoint */
 export interface ApiGuildMember {
+  /** The session's Discord user ID (see fetchGuildMember). */
+  user_id?: string;
   guild_id: string;
   joined_at?: string | null;
   roles?: string[];
@@ -22,6 +24,18 @@ export class AuthError extends Error {
   constructor(message = 'Unauthorized') {
     super(message);
     this.name = 'AuthError';
+  }
+}
+
+/** The session belongs to a different Discord account than the data this page has loaded. */
+export class AccountMismatchError extends Error {
+  expected: string;
+  actual: string | null;
+  constructor(expected: string, actual: string | null) {
+    super('The signed-in Discord account changed');
+    this.name = 'AccountMismatchError';
+    this.expected = expected;
+    this.actual = actual;
   }
 }
 
@@ -71,6 +85,7 @@ interface MeResponse {
 }
 
 interface GuildsResponse {
+  user_id?: unknown;
   guilds: ApiGuild[];
 }
 
@@ -82,13 +97,36 @@ export async function fetchMe(): Promise<ApiUser> {
   return response.user;
 }
 
-export async function fetchGuilds(): Promise<ApiGuild[]> {
-  const response = await apiRequest<GuildsResponse>('/api/guilds');
+/**
+ * Loads the session's guild list and refuses it (AccountMismatchError) unless it belongs to
+ * `accountId`, the account whose data is loaded. The session cookie is shared across tabs, so
+ * another tab may have signed in as someone else. A missing `user_id` is refused too.
+ *
+ * Account-scoped responses bypass the browser HTTP cache (`no-cache` revalidates with the
+ * server, whose edge cache is keyed per user): the browser cache is keyed by URL only and
+ * would otherwise hand one account's response to another account in the same browser.
+ */
+export async function fetchGuilds(accountId: string): Promise<ApiGuild[]> {
+  const response = await apiRequest<GuildsResponse>('/api/guilds', { cache: 'no-cache' });
+  const userId = typeof response.user_id === 'string' ? response.user_id : null;
+  if (userId !== accountId) {
+    throw new AccountMismatchError(accountId, userId);
+  }
   return response.guilds;
 }
 
-export function fetchGuildMember(guildId: string): Promise<ApiGuildMember> {
-  return apiRequest<ApiGuildMember>(`/api/guilds/${guildId}`);
+/**
+ * Loads the session's membership in a guild and refuses it (AccountMismatchError) unless it
+ * was issued for `accountId`: the shared session cookie may already belong to an account
+ * another tab signed in as, before that tab announces the switch.
+ */
+export async function fetchGuildMember(guildId: string, accountId: string): Promise<ApiGuildMember> {
+  const member = await apiRequest<ApiGuildMember>(`/api/guilds/${guildId}`, { cache: 'no-cache' });
+  const userId = typeof member.user_id === 'string' ? member.user_id : null;
+  if (userId !== accountId) {
+    throw new AccountMismatchError(accountId, userId);
+  }
+  return member;
 }
 
 export function fetchWidget(guildId: string): Promise<ApiWidget> {

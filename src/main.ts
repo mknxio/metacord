@@ -1,10 +1,37 @@
 import { AuthError, fetchGuilds, fetchMe } from './lib/api';
 import { createModalController } from './components/modal';
 import { createToastManager } from './components/toast';
-import { getElement, isDemoMode, state } from './lib/state';
-import { initDetailsModal, initSetScreen, initShowToast, render, setScreen, showToast } from './lib/render';
-import { fetchState, initFetchOrchestrator, stopCooldownTimer, stopRateLimitTimer } from './lib/fetch-orchestrator';
+import { getElement, isDemoMode, state, storageOptions } from './lib/state';
+import { syncGuildList } from './lib/guild-sync';
+import { applyGuildSyncOutcome, verifyAndActivateAccount, type IdentityResult } from './lib/hydrate';
+import {
+  initAccountMismatch,
+  initDetailsModal,
+  initSetScreen,
+  initShowToast,
+  initWidgetRateLimit,
+  render,
+  setScreen,
+  showToast,
+} from './lib/render';
+import {
+  fetchState,
+  initFetchOrchestrator,
+  startRateLimitTimer,
+  stopCooldownTimer,
+  stopRateLimitTimer,
+} from './lib/fetch-orchestrator';
 import { hydrateDemo, setupDemoMode } from './lib/demo';
+import { renderUnsupportedDataNotice } from './lib/data-notice';
+import {
+  discardLegacyUserData,
+  onNewerPayloadPreserved,
+  saveUserData,
+  watchPersistedUserData,
+  type UserDataStore,
+} from './lib/storage';
+import { currentAccountEpoch, isAccountCurrent, watchAccountSwitch } from './lib/account';
+import { handleAccountChanged } from './lib/account-view';
 import { setupEvents } from './lib/events';
 
 // --- Error boundary ---
@@ -78,6 +105,15 @@ initShowToast(toast, appShell);
 initSetScreen(closeAppOverlays);
 initDetailsModal(detailsModal);
 initFetchOrchestrator(fetchModal);
+initAccountMismatch(() => handleAccountChanged());
+initWidgetRateLimit({
+  isActive: () => fetchState.rateLimitUntil !== null && fetchState.rateLimitUntil > Date.now(),
+  report: (retryAfterSeconds) => {
+    if (retryAfterSeconds !== null && retryAfterSeconds > 0) {
+      startRateLimitTimer(retryAfterSeconds);
+    }
+  },
+});
 
 // --- Overlays ---
 
@@ -96,12 +132,35 @@ function closeAppOverlays(): void {
   toastRegion.replaceChildren();
 }
 
+// --- Newer-version data notice ---
+
+function renderDataNotice(): void {
+  renderUnsupportedDataNotice(getElement('data-notice'), storageOptions, {
+    // Persist what changed while saving was paused for unpreserved newer-version data.
+    onWritesResumed: () => {
+      try {
+        saveUserData(state.userData, storageOptions);
+      } catch (error) {
+        console.error('Failed to save user data', error);
+        showToast('Unable to save your data in this browser', { variant: 'error' });
+      }
+    },
+  });
+}
+
 // --- App hydration ---
 
+const adoptExternalChange = (data: UserDataStore): void => {
+  state.userData = data;
+  render();
+  renderDataNotice();
+};
+
 const hydrateApp = async (): Promise<void> => {
+  let identity: IdentityResult;
   try {
-    const me = await fetchMe();
-    state.me = me.username;
+    // Only with identity verified is any user data read (#9 per-account isolation).
+    identity = await verifyAndActivateAccount(fetchMe, adoptExternalChange);
   } catch (error) {
     if (error instanceof AuthError) {
       setScreen('login');
@@ -111,19 +170,25 @@ const hydrateApp = async (): Promise<void> => {
     showToast('Unable to verify session', { variant: 'error' });
     return;
   }
-
+  if (identity.status === 'superseded') return;
+  if (identity.status === 'unsettled') {
+    handleAccountChanged();
+    return;
+  }
+  const { me } = identity;
+  renderDataNotice();
   setScreen('app');
 
-  try {
-    state.guilds = await fetchGuilds();
-    render();
-  } catch (error) {
-    if (error instanceof AuthError) {
-      setScreen('login');
-      return;
-    }
-    showToast('Unable to load servers', { variant: 'error' });
-  }
+  // Snapshots are reconciled inside syncGuildList only when the list loads successfully.
+  // fetchGuilds refuses a list for any account other than the one whose data is loaded.
+  const epoch = currentAccountEpoch();
+  const outcome = await syncGuildList(() => fetchGuilds(me.id), () => state.userData, {
+    storageOptions,
+    isCurrent: () => isAccountCurrent(epoch),
+  });
+  applyGuildSyncOutcome(outcome);
+  // Syncing may have preserved newer-version data another tab saved meanwhile.
+  if (outcome.ok) renderDataNotice();
 };
 
 // --- Boot ---
@@ -133,9 +198,17 @@ try {
   setFooterBuildInfo();
   setupEvents({ importModal, fetchModal, instructionsModal, demoModal, categoriesModal });
   setupDemoMode();
+  discardLegacyUserData();
+  renderDataNotice();
+  // Includes saves that preserve another tab's newer data before its storage event arrives.
+  onNewerPayloadPreserved(renderDataNotice);
   if (isDemoMode) {
+    // Adopt saves from other demo tabs; signed-in accounts get theirs from activateAccount.
+    watchPersistedUserData(() => state.userData, adoptExternalChange, storageOptions);
     hydrateDemo();
   } else {
+    // Another tab signed in as a different account: this tab's requests now act for it.
+    watchAccountSwitch(() => handleAccountChanged());
     void hydrateApp();
   }
 } catch (error) {

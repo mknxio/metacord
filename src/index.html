@@ -37,6 +37,7 @@
               Privacy / FAQ<span class="sr-only"> (opens in new window)</span>
             </a>
           </div>
+          <p class="status-message" id="login-status" role="status"></p>
           <div class="demo-loader hidden" id="demo-loader" aria-live="polite">
             <h2 class="demo-title">Demo mode</h2>
             <p class="demo-copy">Load data directly from your device.</p>
@@ -80,6 +81,8 @@
               </div>
             </div>
           </header>
+
+          <div class="data-notice hidden" id="data-notice" role="alert"></div>
 
           <section class="stats-section" data-animate style="--delay: 80ms">
             <div class="stats">
@@ -256,6 +259,11 @@
             <button id="bulk-cancel" class="btn btn-ghost btn-sm" type="button">Cancel</button>
           </div>
 
+          <section class="empty-state hidden" id="guild-list-error" role="status">
+            <h3>Your server list couldn't load</h3>
+            <p>Only server history saved in this browser is shown below. Reload the page to try again.</p>
+          </section>
+
           <section class="section hidden" id="favorites-section">
             <button
               class="section-header"
@@ -337,6 +345,28 @@
             </button>
             <div class="section-content" id="private-content">
               <div class="server-grid" id="private-list"></div>
+            </div>
+          </section>
+
+          <section class="section hidden" id="departed-section">
+            <button
+              class="section-header"
+              type="button"
+              data-collapse-toggle="departed"
+              aria-expanded="true"
+              aria-controls="departed-content"
+            >
+              <div class="section-header-left">
+                <span class="section-chevron" aria-hidden="true">&#9662;</span>
+                <h2>Departed</h2>
+              </div>
+              <span class="count-pill" id="departed-count">0</span>
+            </button>
+            <div class="section-content" id="departed-content">
+              <p class="section-note muted">
+                Servers missing from your latest server list. Departure dates are when Metacord noticed, not when you left.
+              </p>
+              <div class="server-grid" id="departed-list"></div>
             </div>
           </section>
 

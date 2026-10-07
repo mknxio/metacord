@@ -29,7 +29,6 @@ Metacord competes primarily with Discord's own server list, personal notes or sp
 
 ## Open questions
 
-- How should departed-server history and rejoin information work when the upstream API exposes only current memberships?
 - What recovery guarantees should browser-owned personal data have beyond manual export and import?
 - What proof is sufficient before inviting external Discord power users?
 - Does the current hosting/runtime remain the best operational fit after observed rate-limit behavior and migration costs are compared?

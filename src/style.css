@@ -1877,3 +1877,156 @@ input:focus-visible {
     scroll-behavior: auto !important;
   }
 }
+
+/* --- Saved and departed servers --- */
+
+.badge-saved {
+  background: var(--color-accent);
+  color: #0b0d10;
+}
+
+.badge-departed {
+  background: var(--color-surface-3);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+}
+
+.badge-category {
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  text-transform: none;
+  max-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.member-count {
+  color: var(--color-text-dim);
+}
+
+.server-card.is-departed {
+  border-style: dashed;
+  align-items: flex-start;
+}
+
+.server-card.is-departed .server-icon {
+  filter: grayscale(0.6);
+  opacity: 0.85;
+}
+
+.departure-details {
+  display: grid;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  min-width: 0;
+}
+
+.departure-reason,
+.departure-notes {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow-wrap: anywhere;
+}
+
+.departure-reason {
+  font-style: italic;
+}
+
+.departure-notes {
+  color: var(--color-text-dim);
+}
+
+.departure-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.section-note {
+  font-size: var(--text-sm);
+  margin: 0 0 var(--space-3);
+}
+
+.data-notice {
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius-4);
+  background: var(--color-surface-1);
+  padding: var(--space-4);
+  margin-bottom: var(--space-6);
+}
+
+.data-notice-title {
+  margin: 0 0 var(--space-2);
+  font-family: var(--font-display);
+  font-weight: 600;
+}
+
+.data-notice-body {
+  margin: 0 0 var(--space-3);
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.data-notice-warning {
+  color: var(--color-text);
+  font-weight: 600;
+}
+
+.data-notice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.save-later {
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.save-later-title {
+  margin: 0 0 var(--space-2);
+  font-family: var(--font-display);
+  font-size: var(--text-base);
+}
+
+.save-later-status,
+.save-later-invite {
+  font-size: var(--text-sm);
+  margin: 0 0 var(--space-3);
+  overflow-wrap: anywhere;
+}
+
+.form-help {
+  font-size: var(--text-xs);
+  margin: 0;
+}
+
+.form-error {
+  font-size: var(--text-xs);
+  color: var(--color-danger);
+  margin: 0;
+}
+
+.form-error:empty {
+  display: none;
+}
+
+.form-field input[aria-invalid='true'] {
+  border-color: var(--color-danger);
+}
+
+.details-rejoin {
+  margin-bottom: var(--space-4);
+}
+
+#departure-reason-input {
+  min-height: 64px;
+}

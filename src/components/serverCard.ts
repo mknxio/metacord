@@ -1,8 +1,18 @@
-import { createElement, formatNumber, getBannerUrl, getIconUrl } from '../lib/utils';
+import { createElement, formatNumber, getBannerUrl, getIconUrl, normalizeInviteUrl } from '../lib/utils';
 
 export interface ServerWidgetView {
   instantInvite: string | null;
   presenceCount: number | null;
+}
+
+export interface ServerDepartureView {
+  departedAt: string;
+  reason: string | null;
+  /** Already validated with normalizeInviteUrl. */
+  inviteUrl: string | null;
+  /** Recovered from annotations only; the real name was never captured. */
+  isUnknown: boolean;
+  categoryName: string | null;
 }
 
 export interface ServerView {
@@ -16,6 +26,11 @@ export interface ServerView {
   notes?: string;
   isFavorite: boolean;
   widget?: ServerWidgetView | null;
+  /** Online count: guild-list presence count, falling back to widget presence. */
+  onlineCount?: number | null;
+  memberCount?: number | null;
+  isSaved?: boolean;
+  departure?: ServerDepartureView | null;
 }
 
 export interface ServerCardOptions {
@@ -27,7 +42,72 @@ export interface ServerCardHandlers {
   onToggleFavorite: (guildId: string) => void;
   onOpenDetails: (guildId: string) => void;
   onToggleSelection?: (guildId: string) => void;
+  onForget?: (guildId: string) => void;
 }
+
+export const formatDate = (isoTimestamp: string): string => {
+  const date = new Date(isoTimestamp);
+  return Number.isNaN(date.getTime()) ? 'unknown date' : date.toLocaleDateString();
+};
+
+/** Opens a validated invite in a new tab; returns null for anything that is not a Discord invite. */
+export const createInviteLink = (
+  url: string | null | undefined,
+  className: string,
+  text: string,
+  ariaLabel: string,
+): HTMLAnchorElement | null => {
+  const href = url ? normalizeInviteUrl(url) : null;
+  if (!href) return null;
+  const link = createElement('a', className, text);
+  link.href = href;
+  link.target = '_blank';
+  link.rel = 'noopener noreferrer';
+  link.setAttribute('aria-label', ariaLabel);
+  link.addEventListener('click', (event) => event.stopPropagation());
+  // Keep the card's Enter/Space handler from swallowing link activation.
+  link.addEventListener('keydown', (event) => event.stopPropagation());
+  return link;
+};
+
+const createDepartureDetails = (
+  server: ServerView,
+  departure: ServerDepartureView,
+  handlers: ServerCardHandlers,
+): HTMLElement => {
+  const details = createElement('div', 'departure-details');
+  details.appendChild(createElement('div', 'departure-date', `Left (noticed) ${formatDate(departure.departedAt)}`));
+  if (departure.reason) {
+    details.appendChild(createElement('div', 'departure-reason', departure.reason));
+  }
+  if (server.notes) {
+    details.appendChild(createElement('div', 'departure-notes', server.notes));
+  }
+
+  const actions = createElement('div', 'departure-actions');
+  const rejoin = createInviteLink(
+    departure.inviteUrl,
+    'btn btn-secondary btn-sm',
+    'Rejoin',
+    `Rejoin ${server.nickname ?? server.name} (opens Discord invite)`,
+  );
+  if (rejoin) {
+    actions.appendChild(rejoin);
+  }
+  if (handlers.onForget) {
+    const forget = createElement('button', 'btn btn-ghost btn-sm', 'Forget');
+    forget.type = 'button';
+    forget.setAttribute('aria-label', `Forget ${server.nickname ?? server.name}`);
+    forget.addEventListener('click', (event) => {
+      event.stopPropagation();
+      handlers.onForget?.(server.id);
+    });
+    forget.addEventListener('keydown', (event) => event.stopPropagation());
+    actions.appendChild(forget);
+  }
+  details.appendChild(actions);
+  return details;
+};
 
 const hasBoost = (features: string[]): boolean =>
   features.includes('ANIMATED_ICON') || features.includes('ANIMATED_BANNER');
@@ -54,6 +134,9 @@ export const createServerCard = (
   }
   if (server.isFavorite) {
     card.classList.add('is-favorite');
+  }
+  if (server.departure) {
+    card.classList.add('is-departed');
   }
 
   if (options?.selectionMode) {
@@ -104,14 +187,11 @@ export const createServerCard = (
   });
   actions.appendChild(favoriteButton);
 
-  if (server.widget?.instantInvite) {
-    const inviteLink = createElement('a', 'card-action invite-link', '↗');
-    inviteLink.href = server.widget.instantInvite;
-    inviteLink.target = '_blank';
-    inviteLink.rel = 'noopener';
-    inviteLink.setAttribute('aria-label', 'Open public invite');
-    inviteLink.addEventListener('click', (event) => event.stopPropagation());
-    actions.appendChild(inviteLink);
+  if (!server.departure) {
+    const inviteLink = createInviteLink(server.widget?.instantInvite, 'card-action invite-link', '↗', 'Open public invite');
+    if (inviteLink) {
+      actions.appendChild(inviteLink);
+    }
   }
 
   card.appendChild(actions);
@@ -126,7 +206,7 @@ export const createServerCard = (
     image.onerror = () => image.remove();
     icon.appendChild(image);
   } else {
-    icon.textContent = server.name.charAt(0).toUpperCase();
+    icon.textContent = server.departure?.isUnknown ? '?' : server.name.charAt(0).toUpperCase();
   }
   card.appendChild(icon);
 
@@ -142,7 +222,20 @@ export const createServerCard = (
     content.appendChild(realName);
   }
 
+  if (server.departure?.isUnknown) {
+    content.appendChild(createElement('div', 'server-real-name', `ID: ${server.id}`));
+  }
+
   const badges = createElement('div', 'server-badges');
+  if (server.departure) {
+    badges.appendChild(createElement('span', 'badge badge-departed', 'Departed'));
+  }
+  if (server.isSaved) {
+    badges.appendChild(createElement('span', 'badge badge-saved', 'Saved'));
+  }
+  if (server.departure?.categoryName) {
+    badges.appendChild(createElement('span', 'badge badge-category', server.departure.categoryName));
+  }
   if (server.owner) {
     badges.appendChild(createElement('span', 'badge badge-owner', 'Owner'));
   }
@@ -162,16 +255,27 @@ export const createServerCard = (
     content.appendChild(badges);
   }
 
-  if (server.widget?.presenceCount) {
-    const meta = createElement('div', 'server-meta');
+  const meta = createElement('div', 'server-meta');
+  if (server.onlineCount) {
     const online = createElement('span', 'online-count');
-    online.setAttribute('aria-label', `${formatNumber(server.widget.presenceCount)} online`);
+    online.setAttribute('aria-label', `${formatNumber(server.onlineCount)} online`);
     const dot = createElement('span', 'online-dot');
     dot.setAttribute('aria-hidden', 'true');
     online.appendChild(dot);
-    online.appendChild(document.createTextNode(formatNumber(server.widget.presenceCount)));
+    online.appendChild(document.createTextNode(formatNumber(server.onlineCount)));
     meta.appendChild(online);
+  }
+  if (typeof server.memberCount === 'number') {
+    const members = createElement('span', 'member-count', `${formatNumber(server.memberCount)} members`);
+    members.setAttribute('aria-label', `${formatNumber(server.memberCount)} members`);
+    meta.appendChild(members);
+  }
+  if (meta.children.length > 0) {
     content.appendChild(meta);
+  }
+
+  if (server.departure) {
+    content.appendChild(createDepartureDetails(server, server.departure, handlers));
   }
 
   card.appendChild(content);

@@ -1,7 +1,7 @@
-import { loadUserData, type UserDataStore } from './storage';
+import { createDefaultUserData, loadUserData, type UserDataStore } from './storage';
 
 export type FilterKey = 'all' | 'owned' | 'partner' | 'verified' | 'boosted' | 'discoverable';
-export type BuiltinSectionKey = 'favorites' | 'owned' | 'public' | 'private';
+export type BuiltinSectionKey = 'favorites' | 'owned' | 'public' | 'private' | 'departed';
 export type DynamicSectionKey = `category-${string}`;
 export type SectionKey = BuiltinSectionKey | DynamicSectionKey;
 export type SortKey = 'name-asc' | 'name-desc' | 'online-desc';
@@ -23,6 +23,12 @@ export const filterTooltipCopy: Partial<Record<FilterKey, string>> = {
 export interface AppState {
   me: string | null;
   guilds: import('./api').ApiGuild[];
+  /** Discord user ID whose data `userData` holds; null until /api/me answers and after logout. */
+  accountId: string | null;
+  /** True once `guilds` holds a successfully loaded list (live or demo) this session. */
+  guildListLoaded: boolean;
+  /** True while the latest guild-list load failed: only stored history is shown. */
+  guildListError: boolean;
   userData: UserDataStore;
   activeFilters: Set<FilterKey>;
   search: string;
@@ -46,6 +52,8 @@ export interface DemoGuildEntry {
   banner: string | null;
   owner: boolean;
   features: string[];
+  approximate_member_count: number | null;
+  approximate_presence_count: number | null;
 }
 
 export const getElement = <T extends HTMLElement>(selector: string): T => {
@@ -61,9 +69,9 @@ export const getElement = <T extends HTMLElement>(selector: string): T => {
 export const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
-const BUILTIN_SECTIONS: BuiltinSectionKey[] = ['favorites', 'owned', 'public', 'private'];
+export const BUILTIN_SECTIONS: BuiltinSectionKey[] = ['favorites', 'owned', 'public', 'private', 'departed'];
 
-const isValidSectionKey = (value: string): value is SectionKey =>
+export const isValidSectionKey = (value: string): value is SectionKey =>
   (BUILTIN_SECTIONS as readonly string[]).includes(value) || value.startsWith('category-');
 
 export const loadCollapsedSections = (): Set<SectionKey> => {
@@ -105,12 +113,21 @@ export const saveSortPreference = (sort: SortKey): void => {
 export const collapsedSections = loadCollapsedSections();
 
 export const isDemoMode = new URLSearchParams(window.location.search).get('demo') === '1';
-export const storageOptions = isDemoMode ? { storageKey: DEMO_STORAGE_KEY } : undefined;
+/**
+ * Key of the user data this page reads and writes: the demo key, or the signed-in account's
+ * key once identity is known (see account.ts). Until then there is no key, so nothing is
+ * read or written. Mutated in place so every module holding this object follows it.
+ */
+export const storageOptions: { storageKey?: string } = isDemoMode ? { storageKey: DEMO_STORAGE_KEY } : {};
 
 export const state: AppState = {
   me: null,
+  accountId: null,
   guilds: [],
-  userData: loadUserData(storageOptions),
+  guildListLoaded: false,
+  guildListError: false,
+  // No account data before identity is known; demo mode has its own key from the start.
+  userData: isDemoMode ? loadUserData(storageOptions) : createDefaultUserData(),
   activeFilters: new Set<FilterKey>(),
   search: '',
   sort: loadSortPreference(),
