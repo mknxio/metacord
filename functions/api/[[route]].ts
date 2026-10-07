@@ -25,6 +25,7 @@ import {
   persistSession,
   refreshSession,
   revokeSession,
+  withoutRevokedSessionCookies,
 } from '../lib/session';
 import {
   DiscordGuild,
@@ -36,6 +37,16 @@ import {
 } from '../lib/types';
 
 const app = new Hono<{ Bindings: Env }>();
+
+// Never renew a session that was revoked while its request ran (see withoutRevokedSessionCookies).
+app.use('/api/*', async (c, next) => {
+  await next();
+  const response = await withoutRevokedSessionCookies(c.res, c.req.raw, c.env);
+  if (response === c.res) return;
+  // Hono's res setter merges the previous response's Set-Cookie headers back in; reset first.
+  c.res = undefined as unknown as Response;
+  c.res = response;
+});
 
 const DISCORD_OAUTH_URL = 'https://discord.com/api/oauth2/authorize';
 const DISCORD_TOKEN_URL = 'https://discord.com/api/oauth2/token';

@@ -168,6 +168,32 @@ export async function isSessionRevoked(sessionId: string, env: Env): Promise<boo
 }
 
 /**
+ * Drops renewal Set-Cookie headers for sessions revoked while the request was running. A
+ * request can pass getSessionContext, then wait on Discord while another tab's sign-in
+ * revokes its session; renewing that cookie would overwrite the newer one and sign the
+ * browser out. Checked as the response leaves, so it covers every route that renews.
+ */
+export async function withoutRevokedSessionCookies(
+  response: Response,
+  request: Request,
+  env: Env
+): Promise<Response> {
+  const prefix = `${getSessionCookieName(isSecureContext(request))}=`;
+  const cookies = response.headers.getSetCookie();
+  const kept: string[] = [];
+  for (const cookie of cookies) {
+    const sessionId = cookie.startsWith(prefix) ? cookie.slice(prefix.length).split(';')[0] : '';
+    if (sessionId && (await isSessionRevoked(sessionId, env))) continue;
+    kept.push(cookie);
+  }
+  if (kept.length === cookies.length) return response;
+  const headers = new Headers(response.headers);
+  headers.delete('Set-Cookie');
+  for (const cookie of kept) headers.append('Set-Cookie', cookie);
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
+/**
  * Ends a session for good (logout, or a sign-in that replaces it): writes a tombstone, then
  * deletes the record and its encrypted tokens. getSessionContext refuses tombstoned sessions
  * and re-checks after its rolling write, so a request still in flight with the old cookie

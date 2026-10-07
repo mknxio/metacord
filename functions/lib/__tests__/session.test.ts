@@ -327,3 +327,43 @@ describe('refreshSession', () => {
     expect(await kv.get('session-a')).toBeNull();
   });
 });
+
+describe('renewal cookies for sessions revoked mid-request', () => {
+  it('drops the renewal when a sign-in revokes the session while the request waits on Discord', async () => {
+    await persistSession('session-a', sessionFor('A'), env);
+    let releaseA: () => void = () => {};
+    const aWaiting = new Promise<void>((resolve) => (releaseA = resolve));
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes('/oauth2/token')) {
+        return Response.json({ access_token: 'access-b', refresh_token: 'refresh-b', expires_in: 3600 });
+      }
+      const auth = new Headers(init?.headers).get('Authorization');
+      if (auth === 'Bearer access-A') await aWaiting;
+      return Response.json({ id: auth === 'Bearer access-A' ? 'A' : 'B', username: 'user', avatar: null });
+    });
+
+    const inFlight = app.request(`${ORIGIN}/api/me`, { headers: { Cookie: 'session=session-a' } }, env);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const signIn = await app.request(
+      `${ORIGIN}/api/auth/callback?code=code&state=state`,
+      { headers: { Cookie: 'session=session-a; oauth_state=state; oauth_verifier=verifier' } },
+      env,
+    );
+    expect(signIn.headers.getSetCookie().some((cookie) => cookie.startsWith('session='))).toBe(true);
+    releaseA();
+    const late = await inFlight;
+
+    expect(late.status).toBe(200);
+    expect(late.headers.getSetCookie()).toEqual([]);
+  });
+
+  it('still renews live sessions', async () => {
+    await persistSession('session-a', sessionFor('A'), env);
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      Response.json({ id: 'A', username: 'user', avatar: null }),
+    );
+    const response = await app.request(`${ORIGIN}/api/me`, { headers: { Cookie: 'session=session-a' } }, env);
+    expect(response.headers.getSetCookie()).toEqual([expect.stringMatching(/^session=session-a;/)]);
+  });
+});
